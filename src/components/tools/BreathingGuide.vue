@@ -1,21 +1,26 @@
 <template>
   <div class="breathing-container">
-    <!-- 呼吸圆圈 -->
-    <div class="breathing-circle" :class="phase">
-      <div class="inner-circle"></div>
+    <!-- 中心呼吸圆圈 -->
+    <div class="breathing-circle-wrapper">
+      <!-- 光晕层 -->
+      <div class="breathing-halo" :class="phase"></div>
+      
+      <!-- 核心圆 -->
+      <div class="breathing-core" :class="phase">
+        <div class="circle-content">
+          <span class="phase-text">{{ phaseText }}</span>
+          <span class="timer-text" v-if="isActive">{{ phaseTimer }}</span>
+        </div>
+      </div>
     </div>
-
-    <!-- 引导文字 -->
-    <div class="breathing-text">{{ phaseText }}</div>
-
-    <!-- 进度 -->
-    <div class="breathing-progress">
-      <div class="progress-bar" :style="{ width: progressPercent + '%' }"></div>
+    
+    <div v-if="isActive" class="progress-info">
+      剩余 {{ formatTime(duration - totalTime) }}
     </div>
 
     <!-- 控制按钮 -->
     <button class="breathing-btn" @click="toggleBreathing">
-      {{ isActive ? '结束' : '开始呼吸' }}
+      {{ isActive ? '结束练习' : '开始呼吸' }}
     </button>
   </div>
 </template>
@@ -28,7 +33,7 @@ const props = withDefaults(defineProps<{
   duration?: number
 }>(), {
   pattern: '4-4-4',
-  duration: 120 // 默认2分钟
+  duration: 120 // 默认120秒
 })
 
 const emit = defineEmits<{
@@ -46,24 +51,30 @@ const config = computed(() => patterns[props.pattern] || patterns['4-4-4'])
 
 // 状态
 const isActive = ref(false)
-const phase = ref<'inhale' | 'hold' | 'exhale'>('inhale')
+const phase = ref<'inhale' | 'hold' | 'exhale' | 'ready'>('ready')
 const phaseTimer = ref(0)
 const totalTime = ref(0)
 let intervalId: number | null = null
 
+// 实际持续时间（保底 60s，防止 LLM 传错）
+const actualDuration = computed(() => Math.max(props.duration || 60, 60))
+
+// 文字引导
 const phaseText = computed(() => {
-  if (!isActive.value) return '准备好了吗？'
+  if (!isActive.value) return '点击开始'
   switch (phase.value) {
-    case 'inhale': return '吸气...'
-    case 'hold': return '保持...'
-    case 'exhale': return '呼气...'
+    case 'ready': return '准备...'
+    case 'inhale': return '吸气'
+    case 'hold': return '保持'
+    case 'exhale': return '呼气'
   }
 })
 
-const progressPercent = computed(() => {
-  if (!isActive.value) return 0
-  return Math.min((totalTime.value / props.duration) * 100, 100)
-})
+function formatTime(seconds: number) {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
 
 function toggleBreathing() {
   if (isActive.value) {
@@ -76,37 +87,52 @@ function toggleBreathing() {
 
 function startBreathing() {
   isActive.value = true
-  phase.value = 'inhale'
-  phaseTimer.value = 0
+  phase.value = 'inhale' // 直接开始
+  phaseTimer.value = config.value.inhale
   totalTime.value = 0
 
+  if (intervalId) clearInterval(intervalId)
+  
   intervalId = window.setInterval(() => {
-    phaseTimer.value++
+    phaseTimer.value--
     totalTime.value++
 
     // 检查是否完成
-    if (totalTime.value >= props.duration) {
+    if (totalTime.value >= actualDuration.value) {
       stopBreathing()
       emit('complete')
       return
     }
 
     // 切换阶段
-    if (phase.value === 'inhale' && phaseTimer.value >= config.value.inhale) {
-      phase.value = 'hold'
-      phaseTimer.value = 0
-    } else if (phase.value === 'hold' && phaseTimer.value >= config.value.hold) {
-      phase.value = 'exhale'
-      phaseTimer.value = 0
-    } else if (phase.value === 'exhale' && phaseTimer.value >= config.value.exhale) {
-      phase.value = 'inhale'
-      phaseTimer.value = 0
+    if (phaseTimer.value <= 0) {
+      rotatePhase()
     }
   }, 1000)
 }
 
+function rotatePhase() {
+  if (phase.value === 'inhale') {
+    if (config.value.hold > 0) {
+      phase.value = 'hold'
+      phaseTimer.value = config.value.hold
+    } else {
+      // 兼容没有 hold 的模式（虽然目前都有）
+      phase.value = 'exhale'
+      phaseTimer.value = config.value.exhale
+    }
+  } else if (phase.value === 'hold') {
+    phase.value = 'exhale'
+    phaseTimer.value = config.value.exhale
+  } else if (phase.value === 'exhale') {
+    phase.value = 'inhale'
+    phaseTimer.value = config.value.inhale
+  }
+}
+
 function stopBreathing() {
   isActive.value = false
+  phase.value = 'ready'
   if (intervalId) {
     clearInterval(intervalId)
     intervalId = null
@@ -123,79 +149,119 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
-  padding: 24px 16px;
-  width: 100%;
-}
-
-/* 呼吸圆圈 */
-.breathing-circle {
-  width: 160px;
-  height: 160px;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  display: flex;
-  align-items: center;
   justify-content: center;
-  transition: transform 4s ease-in-out;
+  gap: 30px;
+  padding: 40px 20px;
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
 }
 
-.breathing-circle.inhale {
-  transform: scale(1.2);
+.breathing-circle-wrapper {
+  position: relative;
+  width: 240px;
+  height: 240px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
-.breathing-circle.hold {
-  transform: scale(1.2);
-}
-
-.breathing-circle.exhale {
-  transform: scale(0.8);
-}
-
-.inner-circle {
-  width: 60px;
-  height: 60px;
+/* 光晕层 */
+.breathing-halo {
+  position: absolute;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: var(--shadow-glow);
+  opacity: 0.2;
+  filter: blur(20px);
+  transform: scale(0.8);
+  transition: all 4s ease-in-out;
 }
 
-/* 引导文字 */
-.breathing-text {
-  font-size: 18px;
+/* 核心圆 */
+.breathing-core {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--accent);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+  transition: all 4s ease-in-out;
+}
+
+/* 动画定义 */
+.breathing-halo.inhale {
+  transform: scale(1.5);
+  opacity: 0.4;
+}
+.breathing-core.inhale {
+  transform: scale(1.1);
+  background: var(--accent-soft); 
+  border-color: var(--accent);
+}
+
+.breathing-halo.hold {
+  transform: scale(1.5); /* 保持膨胀状态 */
+  opacity: 0.4;
+}
+.breathing-core.hold {
+  transform: scale(1.1);
+  background: var(--accent-soft);
+}
+
+.breathing-halo.exhale {
+  transform: scale(0.8);
+  opacity: 0.1;
+}
+.breathing-core.exhale {
+  transform: scale(1);
+  background: var(--bg-secondary);
+}
+
+.circle-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.phase-text {
+  font-size: 24px;
   font-weight: 500;
   color: var(--text-primary);
-  min-height: 28px;
 }
 
-/* 进度条 */
-.breathing-progress {
-  width: 100%;
-  height: 4px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-full);
-  overflow: hidden;
+.timer-text {
+  font-size: 18px;
+  color: var(--text-muted);
+  font-family: monospace;
 }
 
-.progress-bar {
-  height: 100%;
-  background: var(--accent);
-  transition: width 1s linear;
-}
-
-/* 控制按钮 */
-.breathing-btn {
-  padding: 12px 24px;
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border-radius: var(--radius-full);
+.progress-info {
   font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.breathing-btn {
+  padding: 12px 32px;
+  background: transparent;
+  color: var(--text-primary);
   border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .breathing-btn:hover {
-  background: var(--accent);
-  color: var(--bg-primary);
+  background: var(--bg-secondary);
   border-color: var(--accent);
+  color: var(--accent);
 }
 </style>

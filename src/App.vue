@@ -8,7 +8,7 @@
       </div>
       <div class="window-controls no-drag">
         <button class="control-btn new-chat" @click="handleNewSession" title="新建会话">
-          <span>+</span>
+          <span>✎</span>
         </button>
         <button class="control-btn settings" @click="showDrawer = true" title="历史与设置">
           <span>🚪</span>
@@ -57,10 +57,7 @@ function handleNewSession() {
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
   overflow: hidden;
-  box-shadow: var(--shadow-soft);
 }
 
 .app-header {

@@ -7,44 +7,155 @@
           <button class="back-btn" @click="$emit('close')">
             <span>←</span>
           </button>
-          <h2>设置与历史</h2>
+          
+          <div class="header-tabs">
+            <button 
+              :class="['tab-btn', { active: activeTab === 'dashboard' }]"
+              @click="activeTab = 'dashboard'"
+            >
+              概览
+            </button>
+            <button 
+              :class="['tab-btn', { active: activeTab === 'history' }]"
+              @click="activeTab = 'history'"
+            >
+              历史
+            </button>
+          </div>
         </header>
 
         <!-- 内容 -->
         <div class="drawer-content">
-          <!-- 历史会话 -->
-          <section class="section">
-            <h3 class="section-title">
-              <span>📜</span> 历史会话
-            </h3>
+          
+          <!-- Dasboard 面板 -->
+          <div v-if="activeTab === 'dashboard'" class="dashboard-panel">
             
-            <div v-if="sessions.length === 0" class="empty-state">
-              暂无历史会话
-            </div>
-            
-            <div v-else class="session-list">
-              <div
-                v-for="session in sessions"
-                :key="session.id"
-                class="session-item"
-                @click="viewSession(session)"
-              >
-                <div class="session-info">
-                  <span class="session-time">{{ formatTime(session.startTime) }}</span>
-                  <span class="session-count">{{ session.messages.length }} 条消息</span>
-                </div>
-                <div class="session-summary">{{ session.summary || '空会话' }}</div>
+            <!-- 能量状态 -->
+            <section class="card">
+              <h3 class="card-title">⚡ 能量周报</h3>
+              <div class="energy-stat">
+                <div class="stat-number">{{ avgEnergy.toFixed(1) }}</div>
+                <div class="stat-label">本周平均能量 / 4.0</div>
               </div>
-            </div>
-          </section>
+              
+              <div class="energy-chart">
+                <div 
+                  v-for="item in energyChartData" 
+                  :key="item.hour"
+                  class="chart-bar-wrapper"
+                >
+                  <div 
+                    class="chart-bar" 
+                    :style="{ height: (item.level / 4 * 100) + '%', opacity: item.hasData ? 1 : 0.1 }"
+                  ></div>
+                  <span class="chart-label" v-if="item.hour % 3 === 0">{{ item.hour }}</span>
+                </div>
+              </div>
+            </section>
 
-          <!-- 知识库 -->
-          <section class="section">
-            <h3 class="section-title">
-              <span>📚</span> 知识库
-            </h3>
-            <div class="coming-soon">规划中...</div>
-          </section>
+            <!-- 价值观画像 -->
+            <section class="card">
+              <h3 class="card-title">🧭 核心价值观</h3>
+              
+              <div v-if="sortedValues.some(v => v.value > 0)" class="radar-content">
+                <RadarChart 
+                  :data="radarChartData" 
+                  :max="5" 
+                  :size="200"
+                />
+                
+                <!-- 列表展示 Top 3 -->
+                <div class="values-list-mini">
+                   <div 
+                    v-for="(item, idx) in sortedValues.slice(0, 3)" 
+                    :key="item.key"
+                    class="value-item-row"
+                  >
+                    <span class="value-rank">{{ idx + 1 }}</span>
+                    <span class="value-name">{{ item.dimension }}</span>
+                    <div class="value-bar-bg">
+                      <div class="value-bar-fill" :style="{ width: (item.value / 5 * 100) + '%' }"></div>
+                    </div>
+                    <span class="value-score">{{ item.value.toFixed(1) }}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div v-else class="empty-data">
+                暂无数据，试着使用"价值观雷达"工具
+              </div>
+            </section>
+
+            <!-- 边界练习 -->
+            <section class="card">
+              <h3 class="card-title">🛡️ 边界练习</h3>
+              <div class="coming-soon sm">
+                 记录功能开发中...
+              </div>
+            </section>
+
+            <!-- 记忆 -->
+            <section class="card">
+              <h3 class="card-title">
+                🧠 我对你的了解
+                <button 
+                  v-if="allMemories.length > 0"
+                  class="clear-btn" 
+                  @click="handleClearMemories"
+                  title="清空所有记忆"
+                >
+                  🗑️
+                </button>
+              </h3>
+              
+              <div v-if="allMemories.length === 0" class="empty-data">
+                还没有记忆，聊聊天后我会记住重要的事
+              </div>
+              
+              <div v-else class="memory-list">
+                <div 
+                  v-for="memory in allMemories.slice(0, 5)" 
+                  :key="memory.id"
+                  class="memory-item"
+                >
+                  <span class="memory-type" :class="memory.type">
+                    {{ memoryTypeLabel(memory.type) }}
+                  </span>
+                  <span class="memory-content">{{ memory.content }}</span>
+                  <button 
+                    class="memory-delete" 
+                    @click="handleDeleteMemory(memory.id)"
+                    title="删除"
+                  >×</button>
+                </div>
+              </div>
+            </section>
+
+          </div>
+
+          <!-- 历史会话面板 -->
+          <div v-else-if="activeTab === 'history'" class="history-panel">
+            <section class="section">
+              <div v-if="sessions.length === 0" class="empty-state">
+                暂无历史会话
+              </div>
+              
+              <div v-else class="session-list">
+                <div
+                  v-for="session in sessions"
+                  :key="session.id"
+                  class="session-item"
+                  @click="viewSession(session)"
+                >
+                  <div class="session-info">
+                    <span class="session-time">{{ formatTime(session.startTime) }}</span>
+                    <span class="session-count">{{ session.messages.length }} 条消息</span>
+                  </div>
+                  <div class="session-summary">{{ session.summary || '空会话' }}</div>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
 
         <!-- 会话详情弹窗 -->
@@ -87,8 +198,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useSessionStore, formatTime, type Session } from '@/services/session'
+import { useEnergyStore } from '@/services/energy'
+import { useValuesStore } from '@/services/values'
+import RadarChart from '@/components/visualization/RadarChart.vue'
 
 defineProps<{
   isOpen: boolean
@@ -99,11 +213,73 @@ defineEmits<{
 }>()
 
 const { sessions } = useSessionStore()
+const { weekRecords: energyWeekRecords, getHourlyStats, getAverageLevel } = useEnergyStore()
+const { radarData } = useValuesStore()
+
+// 选中的 Tab
+const activeTab = ref<'history' | 'dashboard'>('dashboard')
 
 const selectedSession = ref<Session | null>(null)
 
 function viewSession(session: Session) {
   selectedSession.value = session
+}
+
+// 能量统计
+const avgEnergy = computed(() => getAverageLevel(energyWeekRecords.value))
+const energyChartData = computed(() => {
+  const stats = getHourlyStats(energyWeekRecords.value)
+  // 补全 9-23 点的数据
+  const hours = []
+  for (let i = 9; i <= 23; i++) {
+    const found = stats.find(s => s.hour === i)
+    hours.push({
+      hour: i,
+      level: found ? found.avgLevel : 0,
+      hasData: !!found
+    })
+  }
+  return hours
+})
+
+// 价值观雷达
+const radarChartData = computed(() => {
+  // 转换数据格式以适配 RadarChart
+  return radarData.value.map(d => ({
+    label: d.dimension,
+    value: d.value,
+    max: 5
+  }))
+})
+
+const sortedValues = computed(() => {
+  return [...radarData.value].sort((a, b) => b.value - a.value)
+})
+
+// ============ 记忆 ============
+import { useMemoryStore, type MemoryType } from '@/services/memory'
+
+const { getAllMemories, deleteMemory, clearAllMemories } = useMemoryStore()
+
+const allMemories = computed(() => getAllMemories())
+
+function memoryTypeLabel(type: MemoryType): string {
+  const labels: Record<MemoryType, string> = {
+    profile: '画像',
+    pattern: '模式',
+    episode: '事件'
+  }
+  return labels[type] || type
+}
+
+function handleDeleteMemory(id: string) {
+  deleteMemory(id)
+}
+
+function handleClearMemories() {
+  if (confirm('确定要清空所有记忆吗？这将无法恢复。')) {
+    clearAllMemories()
+  }
 }
 </script>
 
@@ -192,6 +368,14 @@ function viewSession(session: Session) {
   margin-bottom: 24px;
 }
 
+/* 头部 Tabs */
+.header-tabs {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
 .section-title {
   display: flex;
   align-items: center;
@@ -200,6 +384,252 @@ function viewSession(session: Session) {
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 12px;
+}
+
+.tab-btn {
+  padding: 6px 16px;
+  background: transparent;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Dashboard 卡片 */
+.dashboard-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+/* 能量图表 */
+.energy-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.stat-number {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.energy-chart {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 80px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-bar-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  width: 12px;
+  position: relative;
+}
+
+.chart-bar {
+  width: 6px;
+  background: var(--accent);
+  border-radius: 4px;
+  min-height: 2px;
+}
+
+.chart-label {
+  position: absolute;
+  bottom: -20px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* 价值观列表 */
+.radar-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.values-list-mini {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.values-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.value-item-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.value-rank {
+  width: 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.value-name {
+  width: 32px;
+  color: var(--text-primary);
+}
+
+.value-bar-bg {
+  flex: 1;
+  height: 6px;
+  background: rgba(0,0,0,0.1); /* Dark mode adapt needed later */
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.value-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.value-score {
+  width: 24px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.empty-data {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 12px;
+}
+
+.coming-soon.sm {
+  font-size: 12px;
+  padding: 12px;
+  background: rgba(0,0,0,0.05);
+}
+
+/* 记忆列表 */
+.card-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.clear-btn {
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.clear-btn:hover {
+  background: rgba(255, 100, 100, 0.2);
+  color: #ff6b6b;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+}
+
+.memory-type {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.memory-type.profile {
+  background: rgba(147, 112, 219, 0.2);
+  color: #b19cd9;
+}
+
+.memory-type.pattern {
+  background: rgba(92, 196, 168, 0.2);
+  color: var(--accent);
+}
+
+.memory-type.episode {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffc107;
+}
+
+.memory-content {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.memory-delete {
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.memory-item:hover .memory-delete {
+  opacity: 1;
+}
+
+.memory-delete:hover {
+  background: rgba(255, 100, 100, 0.2);
+  color: #ff6b6b;
 }
 
 .empty-state,

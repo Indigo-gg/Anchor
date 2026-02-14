@@ -5,6 +5,9 @@ import renderer from 'vite-plugin-electron-renderer'
 import { resolve } from 'path'
 
 export default defineConfig({
+    build: {
+        outDir: 'dist-renderer'
+    },
     plugins: [
         vue(),
         electron([
@@ -39,3 +42,4 @@ export default defineConfig({
         }
     }
 })
+
