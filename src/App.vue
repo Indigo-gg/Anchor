@@ -1,31 +1,37 @@
 <template>
   <div class="app-container">
-    <!-- 顶部拖拽区域 + 控制按钮 -->
-    <header class="app-header">
-      <div class="app-title">
-        <span class="anchor-icon">⚓</span>
-        <span>Anchor</span>
-      </div>
-      <div class="window-controls no-drag">
-        <button class="control-btn new-chat" @click="handleNewSession" title="新建会话">
-          <span>✎</span>
-        </button>
-        <button class="control-btn settings" @click="showDrawer = true" title="历史与设置">
-          <span>🚪</span>
-        </button>
-        <button class="control-btn minimize" @click="hideWindow" title="最小化到托盘 (Ctrl+Alt+A)">
-          <span>─</span>
-        </button>
-      </div>
-    </header>
+    <!-- 左侧角色侧边栏 -->
+    <RoleSidebar @role-changed="handleRoleChanged" />
 
-    <!-- 主内容区 -->
-    <main class="app-main">
-      <Chat ref="chatRef" />
-    </main>
+    <!-- 右侧主内容 -->
+    <div class="app-body">
+      <!-- 顶部拖拽区域 + 控制按钮 -->
+      <header class="app-header">
+        <div class="app-title">
+          <span class="anchor-icon">{{ activeRole.icon }}</span>
+          <span>{{ activeRole.name }}</span>
+        </div>
+        <div class="window-controls no-drag">
+          <button class="control-btn new-chat" @click="handleNewSession" title="新建会话">
+            <span>✎</span>
+          </button>
+          <button class="control-btn settings" @click="showDrawer = true" title="历史与设置">
+            <span>🚪</span>
+          </button>
+          <button class="control-btn minimize" @click="hideWindow" title="最小化到托盘 (Ctrl+Alt+A)">
+            <span>─</span>
+          </button>
+        </div>
+      </header>
 
-    <!-- 二级页面抽屉 -->
-    <SettingsDrawer :isOpen="showDrawer" @close="showDrawer = false" />
+      <!-- 主内容区 -->
+      <main class="app-main">
+        <Chat ref="chatRef" />
+      </main>
+
+      <!-- 二级页面抽屉 -->
+      <SettingsDrawer :isOpen="showDrawer" @close="showDrawer = false" />
+    </div>
   </div>
 </template>
 
@@ -33,20 +39,33 @@
 import { ref } from 'vue'
 import Chat from './views/Chat.vue'
 import SettingsDrawer from './views/SettingsDrawer.vue'
+import RoleSidebar from './components/RoleSidebar.vue'
 import { useSessionStore } from './services/session'
+import { useRoleStore } from './services/role'
+import { useAppearanceStore } from './services/appearance'
+
+// 确保在应用启动时初始化会话存储和外观设置
+useSessionStore()
+useAppearanceStore()
 
 const showDrawer = ref(false)
 const chatRef = ref<InstanceType<typeof Chat> | null>(null)
 const { startNewSession } = useSessionStore()
+const { activeRole, activeRoleId } = useRoleStore()
 
 function hideWindow() {
   window.electronAPI?.hideWindow()
 }
 
 function handleNewSession() {
-  startNewSession()
+  startNewSession(activeRoleId.value)
   // 通知 Chat 组件清空消息
   chatRef.value?.clearMessages()
+}
+
+function handleRoleChanged(_roleId: string) {
+  // 角色切换后从恢复的会话加载消息
+  chatRef.value?.loadFromSession()
 }
 </script>
 
@@ -55,9 +74,17 @@ function handleNewSession() {
   width: 100%;
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;  /* 水平布局：侧边栏 + 主体 */
   background: var(--bg-primary);
   overflow: hidden;
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .app-header {

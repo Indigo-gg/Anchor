@@ -2,6 +2,8 @@ import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, d
 import { join } from 'path'
 import { writeFile } from 'fs/promises'
 import { logger, LogCategory } from './logger'
+import { handleLoadAllSkills } from './skill-loader'
+import { executeInSandbox } from './sandbox-executor'
 
 // 设置独立的用户数据目录，避免与其他 Electron 应用的缓存冲突
 app.setPath('userData', join(app.getPath('appData'), 'Anchor'))
@@ -277,6 +279,174 @@ function triggerEnergyReminder() {
 ipcMain.on('show-energy-audit', () => {
     showWindow()
     mainWindow?.webContents.send('open-energy-audit')
+})
+
+// ========== Skill 加载功能 ==========
+
+ipcMain.handle('load-skills', async () => {
+    try {
+        return handleLoadAllSkills()
+    } catch (err) {
+        logger.error(LogCategory.APP, 'Skills 加载失败', err)
+        return []
+    }
+})
+
+ipcMain.handle('install-skill', async (_event, { name, content }) => {
+    try {
+        const skillDir = join(app.getPath('userData'), 'skills', name)
+        const skillFile = join(skillDir, 'SKILL.md')
+
+        const { mkdir, writeFile } = require('fs/promises')
+        await mkdir(skillDir, { recursive: true })
+        await writeFile(skillFile, content, 'utf-8')
+
+        logger.info(LogCategory.APP, `技能安装成功: ${name}`)
+        return { success: true }
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `技能安装失败: ${name}`, err)
+        return { success: false, error: err.message }
+    }
+})
+
+ipcMain.handle('uninstall-skill', async (_event, name) => {
+    try {
+        // 简单起见，name 应该是技能文件夹名
+        const skillDir = join(app.getPath('userData'), 'skills', name.replace('skill_', ''))
+        const { rm } = require('fs/promises')
+        await rm(skillDir, { recursive: true, force: true })
+
+        logger.info(LogCategory.APP, `技能卸载成功: ${name}`)
+        return { success: true }
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `技能卸载失败: ${name}`, err)
+        return { success: false, error: err.message }
+    }
+})
+
+// ========== Skill 命令执行（沙箱） ==========
+
+ipcMain.handle('exec-skill-command', async (_event, { skillKey, command, args, allowedBins }) => {
+    logger.info(LogCategory.APP, `[Sandbox] Skill "${skillKey}" 请求执行: ${command} ${(args || []).join(' ')}`)
+    try {
+        const result = await executeInSandbox(command, args || [], allowedBins || [])
+        return result
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `[Sandbox] 执行异常: ${err.message}`)
+        return { ok: false, error: err.message }
+    }
+})
+
+// ========== LLM 代理功能 (解决 CORS) ==========
+
+const LLM_REQUEST_TIMEOUT = 120_000  // 120 秒超时（大模型首 token 可能较慢）
+const LLM_MAX_RETRIES = 2            // 最多重试 2 次
+
+ipcMain.on('llm-chat-stream', async (event, { config, body, requestId }) => {
+    for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT)
+
+        try {
+            if (attempt > 0) {
+                logger.warn(LogCategory.APP, `LLM 请求第 ${attempt} 次重试...`, { requestId })
+            } else {
+                // 首次请求打印详细参数
+                logger.info(LogCategory.APP, `[LLM] Requesting ${config.baseURL}/chat/completions`, { 
+                    model: body.model,
+                    stream: body.stream,
+                    requestId
+                })
+            }
+
+            const response = await fetch(`${config.baseURL}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${config.apiKey}`
+                },
+                body: JSON.stringify(body),
+                signal: controller.signal
+            })
+
+            clearTimeout(timeout)
+
+            if (!response.ok) {
+                const errorText = await response.text()
+                logger.error(LogCategory.APP, `[LLM] 服务端返回 HTTP ${response.status}`, { errorText })
+                // HTTP 错误不重试（如 400/401/500 等服务端明确拒绝）
+                event.sender.send(`llm-error-${requestId}`, errorText)
+                return
+            }
+
+            if (!response.body) {
+                event.sender.send(`llm-error-${requestId}`, 'Response body is null')
+                return
+            }
+
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) {
+                    event.sender.send(`llm-done-${requestId}`)
+                    break
+                }
+                const chunk = decoder.decode(value, { stream: true })
+                event.sender.send(`llm-chunk-${requestId}`, chunk)
+            }
+
+            // 成功完成，跳出重试循环
+            return
+        } catch (err: any) {
+            clearTimeout(timeout)
+
+            const isTimeout = err.code === 'UND_ERR_HEADERS_TIMEOUT'
+                || err.name === 'AbortError'
+                || err.cause?.code === 'UND_ERR_HEADERS_TIMEOUT'
+
+            if (isTimeout && attempt < LLM_MAX_RETRIES) {
+                // 超时可重试，继续下一轮
+                logger.warn(LogCategory.APP, `LLM 请求超时 (attempt ${attempt + 1}/${LLM_MAX_RETRIES + 1})`, { requestId })
+                continue
+            }
+
+            // 不可重试或已用完重试次数
+            logger.error(LogCategory.APP, 'LLM 代理请求失败', err)
+            event.sender.send(`llm-error-${requestId}`, err.message)
+            return
+        }
+    }
+})
+
+// ========== LLM Reranker 代理 (解决 CORS) ==========
+
+ipcMain.handle('llm-rerank', async (_event, { config, body }) => {
+    try {
+        // 大多数 OpenAI 兼容平台的 reranker endpoint 是 /v1/rerank
+        // config.baseURL 通常是 /v1，如果包含 /v1 就不需要再加，或者我们这里直接用用户给的 /rerank 但相对于 baseURL.
+        // 注意用户提供的 baseURL 一般是 https://api.xxx.com/v1, 所以端点是 /rerank
+        const url = config.baseURL.endsWith('/v1') ? config.baseURL.replace(/\/v1$/, '/v1/rerank') : `${config.baseURL}/rerank`
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify(body)
+        })
+
+        if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`Reranker API Error: ${response.status} ${errorText}`)
+        }
+
+        return await response.json()
+    } catch (err: any) {
+        logger.error(LogCategory.APP, 'Reranker 代理请求失败', err.message)
+        throw err
+    }
 })
 
 // ========== 文件保存功能 ==========

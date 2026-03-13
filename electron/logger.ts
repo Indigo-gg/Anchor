@@ -90,5 +90,6 @@ export const LogCategory = {
     ENERGY: 'Energy',     // 能量检测
     CHAT: 'Chat',         // 对话
     TOOL: 'Tool',         // 工具使用
+    FILE: 'File',         // 文件操作
     ERROR: 'Error'        // 错误
 }

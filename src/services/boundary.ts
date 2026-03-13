@@ -4,6 +4,7 @@
  */
 
 import { ref, computed } from 'vue'
+import { appDb } from './db'
 
 // 边界任务项
 export interface BoundaryTask {
@@ -22,21 +23,47 @@ export interface BoundaryRecord {
 
 // 存储键
 const STORAGE_KEY = 'anchor_boundary_records'
+const MIGRATED_KEY = 'anchor_boundary_records_migrated'
 
 // 响应式数据
 const records = ref<BoundaryRecord[]>([])
 
-// 初始化
-function init() {
+// 初始化标识
+let isInitializing = false
+
+// 异步初始化
+async function init() {
+    if (isInitializing) return
+    isInitializing = true
+
+    await migrateFromLocalStorage()
+
+    try {
+        records.value = await appDb.boundaryRecords.reverse().toArray()
+    } catch (e) {
+        console.error('Failed to load boundary records from db:', e)
+        records.value = []
+    }
+}
+
+/** 从 localStorage 迁移历史数据到 IndexedDB */
+async function migrateFromLocalStorage() {
+    if (localStorage.getItem(MIGRATED_KEY)) return
+
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
         try {
-            records.value = JSON.parse(stored)
+            const oldRecords: BoundaryRecord[] = JSON.parse(stored)
+            if (Array.isArray(oldRecords) && oldRecords.length > 0) {
+                console.log(`[Boundary] 正在将 ${oldRecords.length} 个边界记录迁移至底层数据库...`)
+                await appDb.boundaryRecords.bulkPut(oldRecords)
+            }
         } catch (e) {
-            console.error('Failed to load boundary records:', e)
-            records.value = []
+            console.error('[Boundary] Migration failed:', e)
         }
     }
+    
+    localStorage.setItem(MIGRATED_KEY, 'true')
 }
 
 // 添加记录
@@ -48,8 +75,8 @@ function addRecord(tasks: BoundaryTask[], context: string = '') {
         tasks
     }
 
-    records.value.push(record)
-    saveRecords()
+    records.value.unshift(record)
+    appDb.boundaryRecords.put(JSON.parse(JSON.stringify(record))).catch(e => console.error('[Boundary] 保存记录失败', e))
     console.log('[Boundary] 保存练习记录:', record.id, tasks.length, '个任务')
     return record
 }
@@ -100,21 +127,18 @@ const otherTasks = computed(() => {
     return allTasks.sort((a, b) => b.timestamp - a.timestamp)
 })
 
-// 保存记录
-function saveRecords() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records.value))
-}
+// 保存记录 (已被细分操作替代)
 
 // 删除记录
 function deleteRecord(id: string) {
     records.value = records.value.filter(r => r.id !== id)
-    saveRecords()
+    appDb.boundaryRecords.delete(id).catch(e => console.error('[Boundary] 删除记录失败', e))
 }
 
 // 清空所有记录
 function clearRecords() {
     records.value = []
-    saveRecords()
+    appDb.boundaryRecords.clear().catch(e => console.error('[Boundary] 清空记录失败', e))
 }
 
 // 导出 composable

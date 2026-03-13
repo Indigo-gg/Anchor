@@ -4,6 +4,7 @@
  */
 
 import { ref, computed } from 'vue'
+import { appDb } from './db'
 
 // 能量记录
 export interface EnergyRecord {
@@ -16,21 +17,47 @@ export interface EnergyRecord {
 
 // 存储键
 const STORAGE_KEY = 'anchor_energy_records'
+const MIGRATED_KEY = 'anchor_energy_records_migrated'
 
 // 响应式数据
 const records = ref<EnergyRecord[]>([])
 
-// 初始化
-function init() {
+// 初始化标识
+let isInitializing = false
+
+// 异步初始化
+async function init() {
+    if (isInitializing) return
+    isInitializing = true
+
+    await migrateFromLocalStorage()
+
+    try {
+        records.value = await appDb.energyRecords.reverse().toArray()
+    } catch (e) {
+        console.error('Failed to load energy records from db:', e)
+        records.value = []
+    }
+}
+
+/** 迁移历史 localStorage 会话到 IndexedDB */
+async function migrateFromLocalStorage() {
+    if (localStorage.getItem(MIGRATED_KEY)) return
+
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
         try {
-            records.value = JSON.parse(stored)
+            const oldRecords: EnergyRecord[] = JSON.parse(stored)
+            if (Array.isArray(oldRecords) && oldRecords.length > 0) {
+                console.log(`[Energy] 正在将 ${oldRecords.length} 个能量记录迁移至底层数据库...`)
+                await appDb.energyRecords.bulkPut(oldRecords)
+            }
         } catch (e) {
-            console.error('Failed to load energy records:', e)
-            records.value = []
+            console.error('[Energy] Migration failed:', e)
         }
     }
+    
+    localStorage.setItem(MIGRATED_KEY, 'true')
 }
 
 // 添加记录
@@ -43,8 +70,9 @@ function addRecord(level: 1 | 2 | 3 | 4, activity: string, activityType?: string
         activityType
     }
 
-    records.value.push(record)
-    saveRecords()
+    // 插入最前面保持顺序与 reverse().toArray() 一致
+    records.value.unshift(record)
+    appDb.energyRecords.put(JSON.parse(JSON.stringify(record))).catch(e => console.error('[Energy] 保存记录失败', e))
     return record
 }
 
@@ -111,21 +139,16 @@ function getActivityStats(recordList: EnergyRecord[]): { type: string; avgLevel:
         .sort((a, b) => b.count - a.count)
 }
 
-// 保存记录
-function saveRecords() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records.value))
-}
-
 // 删除记录
 function deleteRecord(id: string) {
     records.value = records.value.filter(r => r.id !== id)
-    saveRecords()
+    appDb.energyRecords.delete(id).catch(e => console.error('[Energy] 删除记录失败', e))
 }
 
 // 清空所有记录
 function clearRecords() {
     records.value = []
-    saveRecords()
+    appDb.energyRecords.clear().catch(e => console.error('[Energy] 清空数据库失败', e))
 }
 
 // 活动类型选项

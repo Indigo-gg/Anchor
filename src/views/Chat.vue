@@ -82,7 +82,21 @@
         rows="1"
         :disabled="isLoading"
       ></textarea>
-      <button class="send-btn" @click="sendMessage" :disabled="!inputText.trim() || isLoading">
+      <!-- 发送/中止按钮 -->
+      <button
+        v-if="isLoading"
+        class="send-btn abort-btn"
+        @click="abortResponse"
+        title="中止回答"
+      >
+        <span>■</span>
+      </button>
+      <button
+        v-else
+        class="send-btn"
+        @click="sendMessage"
+        :disabled="!inputText.trim()"
+      >
         <span>→</span>
       </button>
     </div>
@@ -122,7 +136,7 @@
 
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
-import { marked } from 'marked'
+import { marked, Renderer } from 'marked'
 import ToolRenderer from '@/components/ToolRenderer.vue'
 import MessageContextMenu from '@/components/MessageContextMenu.vue'
 import { useAgentLoop, confirmTool, cancelToolConfirm } from '@/agents/react-agent'
@@ -133,9 +147,16 @@ import { useMessageSelection } from '@/composables/useMessageSelection'
 import html2canvas from 'html2canvas'
 
 // 配置 marked
+const renderer = new Renderer();
+renderer.link = ({ href, title, tokens }) => {
+  const text = renderer.parser.parseInline(tokens);
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer"${title ? ` title="${title}"` : ''}>${text}</a>`;
+};
+
 marked.setOptions({
   breaks: true,
-  gfm: true
+  gfm: true,
+  renderer: renderer
 })
 
 interface Message {
@@ -156,12 +177,13 @@ const messages = ref<Message[]>([])
 const inputText = ref('')
 const isLoading = ref(false)
 const streamingContent = ref('')
+let abortFlag = false  // 中止标志
 const messageListRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const awaitingConfirm = ref(false)  // 是否在等待用户确认
 
 const { sendToAgent } = useAgentLoop()
-const { addMessage, addThought, shouldCompress, addCompressedSummary, getContextMessages } = useSessionStore()
+const { addMessage, shouldCompress, addCompressedSummary, getContextMessages } = useSessionStore()
 const { handleInput, placeholder } = useInputBridge()
 
 // 消息选择管理
@@ -173,7 +195,6 @@ const {
   contextMenuTargetId,
   toggleMultiSelectMode,
   toggleSelection,
-  clearSelection,
   selectAll,
   isSelected,
   showContextMenu,
@@ -429,9 +450,33 @@ async function sendMessage() {
   await processNormalMessage(text)
 }
 
+/** 中止当前回答 */
+function abortResponse() {
+  if (!isLoading.value) return
+  console.log('[Chat] 用户中止回答')
+  abortFlag = true
+
+  // 保留已收到的流式内容
+  if (streamingContent.value.trim()) {
+    const partialMsg = {
+      id: generateMessageId(),
+      role: 'assistant' as const,
+      content: streamingContent.value + '\n\n*(已中止)*',
+      timestamp: Date.now()
+    }
+    messages.value.push(partialMsg)
+    addMessage(partialMsg)
+  }
+
+  streamingContent.value = ''
+  isLoading.value = false
+  scrollToBottom()
+}
+
 async function processNormalMessage(text: string) {
   isLoading.value = true
   streamingContent.value = ''
+  abortFlag = false
   scrollToBottom()
 
   try {
@@ -439,10 +484,14 @@ async function processNormalMessage(text: string) {
       text, 
       messages.value,
       (chunk: string) => {
+        if (abortFlag) return  // 中止后忽略后续 chunk
         streamingContent.value += chunk
         scrollToBottom()
       }
     )
+
+    // 如果已中止，跳过后续处理
+    if (abortFlag) return
     
     let streamingMessageAdded = false
 
@@ -466,10 +515,6 @@ async function processNormalMessage(text: string) {
     }
 
     for (const response of responses) {
-      if (response.thought) {
-        addThought(response.thought, response.type)
-      }
-
       if (response.type === 'message' && response.content) {
         if (streamingMessageAdded) continue
 
@@ -565,7 +610,7 @@ async function processNormalMessage(text: string) {
           role: m.role as 'user' | 'assistant',
           content: m.content
         })))
-        addCompressedSummary(summary)
+        await addCompressedSummary(summary)
         console.log('[Chat] History compressed:', summary)
       } catch (e) {
         console.warn('[Chat] Failed to compress history:', e)
@@ -608,7 +653,8 @@ async function saveImage(imageUrl: string | undefined) {
   try {
     // 尝试通过 Electron API 保存
     if (window.electronAPI?.saveImage) {
-      await window.electronAPI.saveImage(imageUrl)
+      const fileName = `anchor_image_${Date.now()}.png`
+      await window.electronAPI.saveImage(fileName, imageUrl)
     } else {
       // 降级到浏览器下载
       const link = document.createElement('a')
@@ -627,6 +673,27 @@ function clearMessages() {
   streamingContent.value = ''
 }
 
+// 从当前 session 加载消息（角色切换恢复会话时调用）
+function loadFromSession() {
+  const { currentSession } = useSessionStore()
+  if (currentSession.value && currentSession.value.messages.length > 0) {
+    messages.value = currentSession.value.messages.map(m => ({
+      id: `msg_${m.timestamp}_${Math.random().toString(36).slice(2, 9)}`,
+      role: m.role,
+      content: m.content,
+      tool: m.tool,
+      toolParams: m.toolParams,
+      isToolStart: m.toolContext?.isToolStart,
+      isToolResult: m.toolContext?.isToolResult,
+      toolResultData: m.toolContext?.resultData as Record<string, unknown> | undefined,
+      timestamp: m.timestamp
+    }))
+  } else {
+    messages.value = []
+  }
+  streamingContent.value = ''
+}
+
 // 为现有消息补充 ID（向后兼容）
 onMounted(() => {
   messages.value.forEach(msg => {
@@ -635,10 +702,37 @@ onMounted(() => {
       msg.timestamp = msg.timestamp || Date.now()
     }
   })
+
+  // 拦截消息区域中的链接点击，在系统浏览器打开
+  messageListRef.value?.addEventListener('click', (e: MouseEvent) => {
+    const target = (e.target as HTMLElement).closest('a')
+    if (!target) return
+    const href = target.getAttribute('href')
+    if (!href) return
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 通过 Electron shell 或降级 window.open 打开
+    if (window.electronAPI?.openExternal) {
+      window.electronAPI.openExternal(href)
+    } else {
+      window.open(href, '_blank')
+    }
+  })
 })
 
 // 暴露给父组件
-defineExpose({ clearMessages })
+defineExpose({ clearMessages, loadFromSession })
+
+// 启动时自动加载会话：session.init() 是异步的，currentSession 可能在组件挂载后才就绪
+// 用 watch 监听，一旦 currentSession 有值且本地消息为空，自动加载一次
+const { currentSession } = useSessionStore()
+watch(currentSession, (session) => {
+  if (session && session.messages.length > 0 && messages.value.length === 0) {
+    loadFromSession()
+  }
+}, { immediate: true })
 
 // 监听消息变化，自动滚动
 watch(messages, scrollToBottom, { deep: true })
@@ -789,11 +883,14 @@ watch(messages, scrollToBottom, { deep: true })
 .message.user .message-content {
   background: var(--accent);
   color: var(--bg-primary);
+  font-weight: inherit; /* 跟随全局字体粗细设置 */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .message.assistant .message-content:not(.tool-content) {
   background: var(--bg-card);
   color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); /* 为 AI 气泡也加一点阴影 */
 }
 
 /* 工具启动消息 */
@@ -822,13 +919,13 @@ watch(messages, scrollToBottom, { deep: true })
 
 /* Markdown 样式 */
 .markdown-body {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: inherit;
+  line-height: 1.65;
 }
 
 .streaming-text {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: inherit;
+  line-height: 1.65;
   white-space: pre-wrap;
 }
 
@@ -873,6 +970,18 @@ watch(messages, scrollToBottom, { deep: true })
   border-left: 3px solid var(--accent);
   background: var(--accent-soft);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.markdown-body :deep(a) {
+  color: #6ee7a0;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(110, 231, 160, 0.3);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.markdown-body :deep(a:hover) {
+  color: #86efac;
+  border-bottom-color: rgba(134, 239, 172, 0.6);
 }
 
 /* 图片消息 */
@@ -1000,6 +1109,28 @@ watch(messages, scrollToBottom, { deep: true })
 .send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.send-btn.abort-btn {
+  background: rgba(239, 68, 68, 0.85);
+  color: #fff;
+  cursor: pointer;
+  opacity: 1;
+  animation: abort-pulse 1.5s ease-in-out infinite;
+}
+
+.send-btn.abort-btn:hover {
+  background: rgba(239, 68, 68, 1);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+.send-btn.abort-btn span {
+  font-size: 14px;
+}
+
+@keyframes abort-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
 }
 
 /* 图片预览模态框 */

@@ -3,7 +3,8 @@
  * Schwartz's Theory of Basic Human Values
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, toRaw } from 'vue'
+import { appDb } from './db'
 
 // ============ 施瓦茨10维度 ============
 
@@ -136,23 +137,45 @@ export interface ValueSession {
 }
 
 const STORAGE_KEY = 'anchor_schwartz_values'
+const MIGRATED_KEY = 'anchor_schwartz_values_migrated'
 
 const sessions = ref<ValueSession[]>([])
 
-function init() {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-        try {
-            sessions.value = JSON.parse(stored)
-        } catch (e) {
-            console.error('Failed to load values sessions:', e)
-            sessions.value = []
-        }
+// 初始化标识
+let isInitializing = false
+
+async function init() {
+    if (isInitializing) return
+    isInitializing = true
+
+    await migrateFromLocalStorage()
+
+    try {
+        sessions.value = await appDb.valuesRecords.toArray()
+    } catch (e) {
+        console.error('Failed to load values sessions from db:', e)
+        sessions.value = []
     }
 }
 
-function saveData() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.value))
+/** 迁移历史数据到 IndexedDB */
+async function migrateFromLocalStorage() {
+    if (localStorage.getItem(MIGRATED_KEY)) return
+
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored) {
+        try {
+            const oldSessions: ValueSession[] = JSON.parse(stored)
+            if (Array.isArray(oldSessions) && oldSessions.length > 0) {
+                console.log(`[Values] 正在将 ${oldSessions.length} 个历史评估记录迁移至底层数据库...`)
+                await appDb.valuesRecords.bulkPut(oldSessions)
+            }
+        } catch (e) {
+            console.error('[Values] Migration failed:', e)
+        }
+    }
+    
+    localStorage.setItem(MIGRATED_KEY, 'true')
 }
 
 // 添加新会话
@@ -165,7 +188,7 @@ function addSession(context: string): ValueSession {
         scores: {}
     }
     sessions.value.push(session)
-    saveData()
+    appDb.valuesRecords.put(JSON.parse(JSON.stringify(session))).catch(e => console.error('[Values] 保存新评估失败', e))
     return session
 }
 
@@ -183,7 +206,7 @@ function addChoice(sessionId: string, scenario: string, chosenOption: string, di
         sessionId
     }
     session.choices.push(choice)
-    saveData()
+    appDb.valuesRecords.put(JSON.parse(JSON.stringify(toRaw(session)))).catch(e => console.error('[Values] 保存选项失败', e))
     return choice
 }
 
@@ -209,7 +232,7 @@ function completeSession(sessionId: string): Record<string, number> {
     }
 
     session.scores = scores
-    saveData()
+    appDb.valuesRecords.put(JSON.parse(JSON.stringify(toRaw(session)))).catch(e => console.error('[Values] 保存完成结果失败', e))
     console.log('[Values] 会话完成:', sessionId, scores)
     return scores
 }
@@ -255,7 +278,7 @@ const recentSessions = computed(() => {
 
 function clearData() {
     sessions.value = []
-    saveData()
+    appDb.valuesRecords.clear().catch(e => console.error('[Values] 清空数据库失败', e))
 }
 
 // ============ 导出 ============

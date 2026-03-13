@@ -14,10 +14,12 @@
   --text-primary: #e8eaed;
   --text-secondary: #9aa0a8;
   --text-muted: #6b7280;
-  --accent: #5cc4a8;
-  /* 柔和青绿色 - 降低亮度 */
-  --accent-soft: rgba(92, 196, 168, 0.15);
-  --accent-hover: #7dd8bc;
+  
+  /* 调整主色调：降低饱和度，采用更柔和沉稳的青/灰绿色以减轻视觉疲劳 */
+  --accent: #49a58b;
+  --accent-soft: rgba(73, 165, 139, 0.15);
+  --accent-hover: #5ab59d;
+  
   --border: rgba(255, 255, 255, 0.08);
 
   /* 阴影 */
@@ -41,9 +43,9 @@ body {
   width: 100%;
   height: 100%;
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
-  font-weight: 450;
-  line-height: 1.6;
+  font-size: var(--base-font-size, 14.5px);
+  font-weight: var(--base-font-weight, 400);
+  line-height: 1.65;
   color: var(--text-primary);
   background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;

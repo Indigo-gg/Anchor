@@ -3,7 +3,7 @@
     "appId": "com.anchor.app",
     "productName": "Anchor",
     "directories": {
-        "output": "release"
+        "output": "D:/Pcode/relase"
     },
     "files": [
         "dist-electron/**/*",

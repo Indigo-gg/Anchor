@@ -9,9 +9,10 @@
 import { chatStream, structuredChat, generateImage, type Message as LLMMessage } from '@/services/llm'
 import { useMemoryStore } from '@/services/memory'
 import { useSessionStore } from '@/services/session'
-import { useBoundaryStore } from '@/services/boundary'
-import { useValuesStore } from '@/services/values'
-import { useEnergyStore } from '@/services/energy'
+import { useRoleStore } from '@/services/role'
+import { performWebSearch } from '@/services/web-search'
+import { getUnifiedToolByKey, getRouteSkillsDescription } from '@/services/tool-registry'
+import { createToolRecord, updateToolRecord } from '@/services/db'
 
 // ============ 类型定义 ============
 
@@ -28,9 +29,9 @@ export interface AgentResponse {
 
 // 意图路由结果
 interface RouteResult {
-    type: 'quick_reply' | 'think' | 'deep_think' | 'clarify' | 'tool_call' | 'image'
+    type: 'quick_reply' | 'think' | 'deep_think' | 'clarify' | 'tool_call' | 'skill_call' | 'image'
     reply?: string  // quick_reply 或 clarify 时的直接回复
-    tool?: string   // tool_call 时的工具名
+    tool?: string   // tool_call 或 skill_call 时的工具/技能名
     imageSize?: '1:1' | '16:9' | '9:16' | '4:3'  // image 时的尺寸偏好
 }
 
@@ -53,225 +54,151 @@ export function cancelToolConfirm() {
 
 // ============ Prompts ============
 
-// 意图路由 Prompt（快速分类）
-const ROUTE_PROMPT = `你是意图路由器。只返回 JSON，不要回答问题。
+// 意图路由 Prompt（动态生成，注入当前角色的工具列表）
+function getRoutePrompt(): string {
+    const { getRouteToolsDescription, activeRole } = useRoleStore()
+    const toolsDesc = getRouteToolsDescription()
+    const hasTools = toolsDesc.length > 0
+    const useCommon = activeRole.value.useCommonTools
+
+    // V2: 获取外部 Skill 描述
+    const skillsDesc = getRouteSkillsDescription(activeRole.value.toolKeys)
+    const hasSkills = skillsDesc.length > 0
+
+    // 构建工具类型说明
+    let toolSection = ''
+    if (hasTools) {
+        toolSection = `\n- tool_call: 用户确认要使用某个工具（回复"好/可以/试试"且上文提到了工具）`
+    }
+
+    let skillSection = ''
+    if (hasSkills) {
+        skillSection = `\n- skill_call: 用户需要使用外部能力/技能（天气查询、代码、第三方服务等）`
+    }
+
+    let imageSection = ''
+    if (useCommon) {
+        imageSection = `\n- image: 明确要求生成图片`
+    }
+
+    let toolListSection = ''
+    if (hasTools) {
+        toolListSection = `\n\n可用工具：\n${toolsDesc}`
+    }
+
+    // V2: 合并外部 Skill 列表
+    if (hasSkills) {
+        toolListSection += `\n\n可用外部能力 (skill)：\n${skillsDesc}`
+    }
+
+    let imageSizeSection = ''
+    if (useCommon) {
+        imageSizeSection = `\n\n图片尺寸识别（仅 type=image 时）：
+- "1:1": 正方形、方形、头像、头图
+- "16:9": 横屏、横版、宽屏、桌面壁纸、电脑壁纸
+- "9:16": 竖屏、竖版、手机壁纸、手机屏保
+- "4:3": 4:3比例
+- 用户未指定尺寸时不填 imageSize（默认正方形）`
+    }
+
+    return `你是意图路由器。只返回 JSON，不要回答问题。
+
+当前角色：${activeRole.value.name}
+角色定位：${activeRole.value.description}
 
 分析对话上下文，判断用户意图：
 
 类型：
 - clarify: 意图不清需反问（太模糊/指代不明）
-- quick_reply: 简单问候、一句话能答（你好/谢谢/今天几号）
-- think: 需要稍微思考（日常对话/简单烦恼/随便聊聊）
-- deep_think: 需要认真深入思考（复杂情绪/人生困惑/深层心理/需要共情分析）
-- tool_call: 用户确认要使用某个工具（回复"好/可以/试试"且上文提到了工具）
-- image: 明确要求生成图片
+- quick_reply: 简单问候、一两句话能答（你好/谢谢/今天几号）
+- think: 需要进行思考（日常对话/一般问题/随便聊聊）
+- deep_think: 需要认真深入思考（复杂分析/深层问题/需要专业详细分析）${toolSection}${skillSection}${imageSection}
 
 区分 think 和 deep_think：
-- think: "今天有点累" "工作好烦" "最近睡的不好"
-- deep_think: "我不知道活着有什么意义" "和父母的关系让我很痛苦" "我感觉自己很失败"
-
-可用工具：
-- breathing_guide: 呼吸练习/放松
-- boundary_mapper: 边界梳理/人际问题
-- emergency_guide: 着陆练习/情绪急救
-- energy_audit: 能量状态
-- values_compass: 价值观探索
+- think: 简短问候、简单一两句就能回答的问题
+- deep_think: 需要详细分析、多角度思考、专业建议的复杂问题${toolListSection}
 
 输出格式：
-{"type":"类型","reply":"quick_reply/clarify时填写","tool":"tool_call时填工具名","imageSize":"image时填尺寸"}
-
-图片尺寸识别（仅 type=image 时）：
-- "1:1": 正方形、方形、头像、头图
-- "16:9": 横屏、横版、宽屏、桌面壁纸、电脑壁纸
-- "9:16": 竖屏、竖版、手机壁纸、手机屏保
-- "4:3": 4:3比例
-- 用户未指定尺寸时不填 imageSize（默认正方形）
+{"type":"类型","reply":"quick_reply/clarify时填写（要符合当前角色的身份和风格）","tool":"tool_call/skill_call时填工具名","imageSize":"image时填尺寸"}${imageSizeSection}
 
 示例：
-用户说"你好" -> {"type":"quick_reply","reply":"你好呀 🌿"}
-用户说"今天工作好累" -> {"type":"think"}
-用户说"我很焦虑，不知道该怎么办" -> {"type":"deep_think"}
-助手问"要不做个呼吸练习？"用户回"好" -> {"type":"tool_call","tool":"breathing_guide"}
-用户说"帮我画一张横屏的山水画" -> {"type":"image","imageSize":"16:9"}`
+用户说"你好" -> {"type":"quick_reply","reply":"你好！有什么可以帮你的吗？"}
+用户说"随便聊聊" -> {"type":"think"}
+用户说一个需要详细分析的复杂问题 -> {"type":"deep_think"}
+用户说"东京天气怎么样" -> {"type":"skill_call","tool":"skill_weather"}`
+}
 
-// 深度对话 Prompt（纯对话，不要求 JSON）
-function getComplexPrompt(historyMessages: LLMMessage[] = []): string {
-    const { getRelevantMemories, formatMemoriesForPrompt, extractKeywords } = useMemoryStore()
+import { searchMemories } from '../services/memory-store'
 
-    // 从最近的对话中提取关键词
+// 深度对话 Prompt（从当前角色的 systemPrompt 读取）
+async function getComplexPrompt(historyMessages: LLMMessage[] = []): Promise<string> {
+    const { activeRole } = useRoleStore()
+    const { formatMemoriesForPrompt } = useMemoryStore()
+
+    // 从最近的对话中提取关键词或直接使用用户的 query 进行检索
     const recentText = historyMessages
         .filter(m => m.role === 'user')
         .slice(-3)
         .map(m => m.content)
         .join(' ')
-    const contextTags = extractKeywords(recentText)
 
-    // 使用语义标签检索相关记忆
-    const memories = getRelevantMemories(contextTags, 5)
-    const memorySection = formatMemoriesForPrompt(memories)
-
-    if (contextTags.length > 0) {
-        console.log('[Memory] 检索标签:', contextTags, '找到记忆:', memories.length)
+    // 统一混合检索
+    let memories: any[] = []
+    try {
+        memories = await searchMemories(recentText || '你好', activeRole.value.id, { limit: 5 })
+        if (memories.length > 0) {
+            console.log('[Memory] Hybrid Search found memories:', memories.length)
+        }
+    } catch (e) {
+        console.warn('[Memory] Search failed:', e)
     }
 
-    let prompt = `你是 Anchor，温暖的正念引导者。
+    const memorySection = formatMemoriesForPrompt(memories)
 
-特质：温暖、共情、不说教、先倾听
-风格：像朋友聊天，自然亲切
+    // 使用当前角色的 systemPrompt（包含全局 preamble）
+    const { getFullSystemPrompt } = useRoleStore()
+    let prompt = getFullSystemPrompt()
 
-回复原则：
-- 每次回复要完整表达想法，不要话说一半
-- 保持简洁但不要过于精简，该说清楚的要说清楚
-- 2-4句话为宜，复杂话题可以适当多说
-- 不要用列表或格式化输出，就像聊天一样
-
-如果用户情况适合某个工具，可以自然地建议（但不是必须）：
-- 人际边界问题 -> 可以建议"要不我们来梳理一下边界？"
-- 想放松 -> 可以建议"要不一起做个呼吸练习？"
-- 情绪崩溃 -> 可以建议"要不先做个着陆练习？"
-
-直接回复，不要用 JSON 格式。`
+    // 注入压缩历史
+    const { getContextMessages } = useSessionStore()
+    const { compressed } = getContextMessages()
+    if (compressed && compressed.length > 0) {
+        prompt += `\n\n[之前的对话摘要]：\n${compressed.join('\n')}`
+    }
 
     if (memorySection) {
-        prompt += `
-
-用户记忆（自然融入对话，不要直接提及"我记得"）：
-${memorySection}`
+        prompt += `\n\n用户记忆（自然融入对话，不要直接提及"我记得"）：\n${memorySection}`
     }
 
     return prompt
 }
 
-// ============ 工具确认消息 ============
+// ============ 工具确认消息（从角色配置读取） ============
 
 function generateConfirmMessage(tool: string): string {
-    const messages: Record<string, string> = {
-        emergency_guide: '我感觉到你现在可能很难受。如果你愿意，我可以带你做一个简单的着陆练习，帮助你先平静下来。要试试吗？',
-        breathing_guide: '我们可以一起做个呼吸练习，帮助你放松一下。现在开始？',
-        boundary_mapper: '听起来这个情况涉及到你和他人的边界。我可以带你梳理一下，看看哪些是你能控制的。要试试吗？',
-        energy_audit: '要不我们先看看你现在的能量状态？这能帮助我们更好地了解你的情况。',
-        values_compass: '我们可以一起探索一下你内心真正看重的是什么。愿意试试吗？'
-    }
-    return messages[tool] || `我觉得「${tool}」可能对你有帮助。要试试吗？`
+    const { getToolConfirmMessage } = useRoleStore()
+    return getToolConfirmMessage(tool)
 }
 
-// 用户已确认后的工具引导语（直接开始）
+// 用户已确认后的工具引导语（从角色配置读取）
 function getToolWelcomeMessage(tool: string): string {
-    const messages: Record<string, string> = {
-        emergency_guide: '好的，我们来做一个简单的着陆练习。先深呼吸，告诉我现在你身边能看到什么？',
-        breathing_guide: '好的，让我们开始。先找一个舒服的姿势，准备好了告诉我。',
-        boundary_mapper: '好的，我们来梳理一下。先告诉我，你想探讨的是哪段关系？或者是什么具体的情境让你感到边界被侵犯？',
-        energy_audit: '好的，先和我说说你现在的感受。身体累吗？情绪如何？',
-        values_compass: '好的，我们来探索一下。最近有什么事情让你在做决定时感到纠结吗？'
-    }
-    return messages[tool] || '好的，我们开始吧。先说说你的具体情况？'
+    const { getToolWelcomeMsg } = useRoleStore()
+    return getToolWelcomeMsg(tool)
 }
 
-// 保存工具结果到对应存储服务
+// 保存工具结果（代理到 role store -> tool-registry）
 function saveToolResult(tool: string, result: Record<string, unknown>) {
-    try {
-        switch (tool) {
-            case 'boundary_mapper': {
-                const { addRecord } = useBoundaryStore()
-                const analysis = result.analysis as { tasks?: Array<{ label: string; reason: string; score: number }> }
-                if (analysis?.tasks) {
-                    addRecord(analysis.tasks, '')
-                }
-                break
-            }
-            case 'values_compass': {
-                // values_compass 使用卡片式评估，数据保存由 ValuesQuiz 组件内部处理
-                // 这里只处理情境收集完成的信号，不保存数据
-                console.log('[Agent] values_compass 进入 quiz 模式，context:', result.context)
-                break
-            }
-            case 'energy_audit': {
-                const { addRecord } = useEnergyStore()
-                const energy = result.energy as { body?: number; emotion?: number; motivation?: number; summary?: string }
-                if (energy) {
-                    // 计算综合能量等级 (1-4)
-                    const avgScore = ((energy.body || 5) + (energy.emotion || 5) + (energy.motivation || 5)) / 3
-                    const level = avgScore >= 8 ? 4 : avgScore >= 6 ? 3 : avgScore >= 4 ? 2 : 1
-                    addRecord(level as 1 | 2 | 3 | 4, energy.summary || 'AI能量评估', 'ai_analysis')
-                }
-                break
-            }
-        }
-        console.log('[Agent] 工具结果已保存:', tool)
-    } catch (e) {
-        console.warn('[Agent] 保存工具结果失败:', e)
-    }
+    const { saveToolResult: save } = useRoleStore()
+    save(tool, result)
 }
 
-// ============ 工具专属提示词 ============
+// ============ 工具提示词（从角色配置动态获取） ============
 
-const TOOL_PROMPTS: Record<string, { system: string; maxTurns: number }> = {
-    boundary_mapper: {
-        system: `你是"边界整理师"。帮助用户梳理人际边界问题。
-
-流程：
-1. 通过 2-5 个问题理清事情的来龙去脉（具体轮数由你判断，信息足够即可结束）
-2. 了解：发生了什么、涉及谁、用户的感受、用户想要什么
-3. 当信息足够时，返回分析结果
-
-原则：温和、客观、关注事实。每次只问一个问题。不要急于结束，确保理解清楚再总结。
-
-当信息足够时，返回 JSON：
-{"complete": true, "analysis": {"tasks": [{"label": "标签5字内", "reason": "一句话解释", "score": 0-10}]}}
-score: 8-10=我的课题(完全掌控), 4-7=部分影响, 0-3=他人课题(无法控制)
-
-如果还需要收集信息，直接用文本回复，不要用 JSON。`,
-        maxTurns: 6
-    },
-    values_compass: {
-        system: `你是"价值观向导"。帮助用户准备价值观评估。
-
-流程：
-1. 通过 1-2 个问题了解用户想要探索的情境（例如：工作决策、人际关系、生活选择）
-2. 当你了解清楚情境后，返回准备开始评估
-
-原则：简洁友好，快速收集情境即可。
-
-当情境收集完成时，返回 JSON：
-{"complete": true, "mode": "quiz", "context": "用户情境的简要描述"}
-
-如果还需要了解情境，直接用文本回复，不要用 JSON。`,
-        maxTurns: 3
-    },
-    energy_audit: {
-        system: `你是"能量评估师"。帮助用户了解当前的能量状态。
-
-通过 2-4 个问题了解（具体轮数由你判断）：
-- 身体状态（睡眠、食欲、精力）
-- 情绪状态
-- 最近的压力来源
-
-原则：温和询问，不要急于结束。
-
-当信息足够时，返回 JSON：
-{"complete": true, "energy": {"body": 1-10, "emotion": 1-10, "motivation": 1-10, "summary": "简短总结"}}
-
-如果还需要收集信息，直接用文本回复，不要用 JSON。`,
-        maxTurns: 5
-    },
-    breathing_guide: {
-        system: `你是"呼吸引导师"。引导用户进行放松呼吸。
-
-直接开始引导，不需要多问。返回：
-{"complete": true, "guide": "ready"}
-
-用温暖的语言告诉用户我们即将开始。`,
-        maxTurns: 1
-    },
-    emergency_guide: {
-        system: `你是"着陆引导师"。帮助用户在情绪危机时稳定下来。
-
-直接开始引导，不需要多问。返回：
-{"complete": true, "guide": "ready"}
-
-用平静、温和的语气告诉用户我们即将开始。`,
-        maxTurns: 1
-    }
+function getToolPromptConfig(toolKey: string): { system: string; maxTurns: number } | null {
+    const { getToolConfig } = useRoleStore()
+    const tool = getToolConfig(toolKey)
+    if (!tool) return null
+    return { system: tool.systemPrompt, maxTurns: tool.maxTurns }
 }
 
 // ============ Agent 主逻辑 ============
@@ -303,7 +230,7 @@ export function useAgentLoop() {
 
             try {
                 const routeMessages: LLMMessage[] = [
-                    { role: 'system', content: ROUTE_PROMPT },
+                    { role: 'system', content: getRoutePrompt() },
                     ...historyMessages.slice(-4)
                 ]
                 route = await structuredChat<RouteResult>(routeMessages, { intent: 'fast' })
@@ -320,23 +247,57 @@ export function useAgentLoop() {
                     // 快速回复，直接返回
                     return [{
                         type: 'message',
-                        content: route.reply || '你好呀 🌿',
-                        thought: 'quick_reply'
+                        content: route.reply || '你好呀 🌿'
                     }]
 
                 case 'clarify':
                     // 澄清意图
                     return [{
                         type: 'message',
-                        content: route.reply || '你可以说具体一点吗？',
-                        thought: 'clarify'
+                        content: route.reply || '你可以说具体一点吗？'
                     }]
 
-                case 'tool_call':
-                    // 用户确认要使用工具 -> 进入内核态
-                    if (route.tool && TOOL_PROMPTS[route.tool]) {
+                case 'tool_call': {
+                    // ★ web_search：不进入内核态，直接内联执行（类似 image 的处理方式）
+                    if (route.tool === 'web_search') {
+                        console.log('[Agent] 网络检索（内联执行）...')
+                        const userQuery = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
+
+                        const { currentSession } = useSessionStore()
+                        const { activeRole } = useRoleStore()
+                        const record = await createToolRecord({
+                            sessionId: currentSession.value?.id,
+                            roleId: activeRole.value.id,
+                            toolName: 'web_search',
+                            startTime: Date.now(),
+                            params: { query: userQuery },
+                            status: 'pending'
+                        })
+
+                        // 1. 调用 Tavily 搜索
+                        const searchResultText = await performWebSearch(userQuery)
+
+                        await updateToolRecord(record, {
+                            endTime: Date.now(),
+                            status: 'success',
+                            result: { text: searchResultText.slice(0, 500) }
+                        })
+
+                        // 2. 将搜索结果拼入上下文，交给深度思考模型总结回答
+                        const enhancedHistory: LLMMessage[] = [
+                            ...historyMessages,
+                            {
+                                role: 'system',
+                                content: `以下是互联网检索到的最新信息。请直接用自然语言回答用户问题，绝对不要输出任何 JSON 格式。在回答末尾标注参考来源链接。\n\n${searchResultText}`
+                            }
+                        ]
+                        return await handleComplexChat(enhancedHistory, 'complex', onChunk)
+                    }
+
+                    // 其他工具 -> 进入内核态
+                    const toolPromptCfg = route.tool ? getToolPromptConfig(route.tool) : null
+                    if (route.tool && toolPromptCfg) {
                         console.log('[Agent] 进入工具内核态:', route.tool)
-                        const toolConfig = TOOL_PROMPTS[route.tool]
 
                         // 检查用户是否已明确确认（如"好"、"试试"等）
                         const lastUserContent = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
@@ -344,30 +305,41 @@ export function useAgentLoop() {
 
                         // 进入内核态
                         const { startTool } = useSessionStore()
-                        startTool(route.tool, toolConfig.system, toolConfig.maxTurns)
+                        startTool(route.tool, toolPromptCfg.system, toolPromptCfg.maxTurns)
 
                         if (isConfirmation) {
-                            // 用户已确认，直接开始工具对话（返回工具的引导语）
+                            // 用户已确认，直接开始工具对话
                             console.log('[Agent] 用户已确认，直接启动工具')
                             return [{
                                 type: 'tool_start',
                                 tool: route.tool,
-                                content: getToolWelcomeMessage(route.tool),
-                                thought: 'tool_start_confirmed'
+                                content: getToolWelcomeMessage(route.tool)
                             }]
                         } else {
                             // 用户还没确认，发送确认消息
                             return [{
                                 type: 'tool_start',
                                 tool: route.tool,
-                                content: generateConfirmMessage(route.tool),
-                                thought: 'tool_start'
+                                content: generateConfirmMessage(route.tool)
                             }]
                         }
                     }
                     // 如果没有解析出工具名，走深度对话
                     console.log('[Agent] tool_call 但未识别工具，走深度对话')
                     return await handleComplexChat(historyMessages, 'simple', onChunk)
+                }
+
+                // V2: 外部 Skill 调用
+                case 'skill_call': {
+                    const skillKey = route.tool
+                    if (skillKey) {
+                        console.log('[Agent] 外部 Skill 调用:', skillKey)
+                        return await handleSkillCall(skillKey, historyMessages, onChunk)
+                    }
+                    // 未识别 Skill，走深度对话
+                    console.log('[Agent] skill_call 但未识别 Skill，走深度对话')
+                    return await handleComplexChat(historyMessages, 'complex', onChunk)
+                }
 
                 case 'image':
                     // 图片生成
@@ -385,19 +357,36 @@ export function useAgentLoop() {
                     }
                     const imageSize = route.imageSize ? sizeMap[route.imageSize] : '1024x1024'
 
+                    const { currentSession: imageSession } = useSessionStore()
+                    const { activeRole: imageRole } = useRoleStore()
+                    const imgRecord = await createToolRecord({
+                        sessionId: imageSession.value?.id,
+                        roleId: imageRole.value.id,
+                        toolName: 'image_gen',
+                        startTime: Date.now(),
+                        params: { prompt: imagePrompt, size: imageSize },
+                        status: 'pending'
+                    })
+
                     const result = await generateImage(imagePrompt, imageSize)
+
+                    await updateToolRecord(imgRecord, {
+                        endTime: Date.now(),
+                        status: result.imageUrl ? 'success' : 'error',
+                        result: result,
+                        errorMessage: result.error
+                    })
+
                     if (result.imageUrl) {
                         return [{
                             type: 'image',
                             imageUrl: result.imageUrl,
-                            content: '图片已生成 🎨',
-                            thought: 'image'
+                            content: '图片已生成 🎨'
                         }]
                     } else {
                         return [{
                             type: 'message',
-                            content: result.error || '图片生成失败，请稍后再试',
-                            thought: 'image_error'
+                            content: result.error || '图片生成失败，请稍后再试'
                         }]
                     }
 
@@ -426,7 +415,7 @@ export function useAgentLoop() {
         intent: 'simple' | 'complex',
         onChunk?: (chunk: string) => void
     ): Promise<AgentResponse[]> {
-        const prompt = getComplexPrompt(historyMessages)
+        const prompt = await getComplexPrompt(historyMessages)
         const chatMessages: LLMMessage[] = [
             { role: 'system', content: prompt },
             ...historyMessages
@@ -443,8 +432,7 @@ export function useAgentLoop() {
 
         return [{
             type: 'message',
-            content: fullContent,
-            thought: intent === 'complex' ? 'deep_think_reply' : 'think_reply'
+            content: fullContent
         }]
     }
 
@@ -453,9 +441,9 @@ export function useAgentLoop() {
         historyMessages: LLMMessage[],
         onChunk?: (chunk: string) => void
     ): Promise<AgentResponse[]> {
-        const fallbackPrompt = `你是 Anchor，温暖的正念引导者。
-特质：温暖、共情、不说教、先倾听
-风格：简短、自然、像朋友聊天
+        const { getFullSystemPrompt } = useRoleStore()
+        const fallbackPrompt = `${getFullSystemPrompt()}
+
 直接回复，不要用 JSON 格式。`
 
         const chatMessages: LLMMessage[] = [
@@ -474,8 +462,172 @@ export function useAgentLoop() {
 
         return [{
             type: 'message',
-            content: fullContent,
-            thought: 'fallback'
+            content: fullContent
+        }]
+    }
+
+    // ========== V2: 外部 Skill 调用处理 ==========
+    async function handleSkillCall(
+        skillKey: string,
+        historyMessages: LLMMessage[],
+        onChunk?: (chunk: string) => void
+    ): Promise<AgentResponse[]> {
+        const skill = getUnifiedToolByKey(skillKey)
+        if (!skill?.skillMeta) {
+            console.warn('[Agent] 未找到 Skill 或无 skillMeta:', skillKey)
+            return await handleComplexChat(historyMessages, 'complex', onChunk)
+        }
+
+        const hasBins = skill.skillMeta.requires?.bins && skill.skillMeta.requires.bins.length > 0
+
+        if (hasBins) {
+            // ★ 命令型 Skill：两阶段执行
+            return await handleExecutableSkill(skill, historyMessages, onChunk)
+        } else {
+            // 知识型 Skill：保持 prompt-inject
+            return await handlePromptInjectSkill(skill, historyMessages, onChunk)
+        }
+    }
+
+    /** 命令型 Skill：命令提取 → 沙箱执行 → 结果回答 */
+    async function handleExecutableSkill(
+        skill: any,
+        historyMessages: LLMMessage[],
+        onChunk?: (chunk: string) => void
+    ): Promise<AgentResponse[]> {
+        const { executeSkillCommand } = await import('@/services/skill-executor')
+        const allowedBins = skill.skillMeta?.requires?.bins || []
+
+        // 阶段1：让 LLM 提取需要执行的命令
+        console.log('[Agent] Skill 命令提取阶段...')
+        const extractPrompt = `你是命令提取器。根据用户的问题和下面的技能说明，提取需要执行的命令。
+
+## 技能说明
+${skill.skillMeta?.markdownBody || ''}
+
+## 可用命令
+只能使用以下命令: ${allowedBins.join(', ')}
+
+## 输出格式
+只返回 JSON，不要其他内容：
+{"command": "命令名", "args": ["参数1", "参数2"]}
+
+注意：
+- args 数组中每个参数是一个独立的字符串
+- URL 作为一个完整参数
+- 不要使用 shell 管道或重定向`
+
+        const lastUserMsg = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
+        const extractMessages: LLMMessage[] = [
+            { role: 'system', content: extractPrompt },
+            { role: 'user', content: lastUserMsg }
+        ]
+
+        let cmdJson: { command: string; args: string[] }
+        try {
+            cmdJson = await structuredChat<{ command: string; args: string[] }>(extractMessages, { intent: 'fast' })
+            console.log('[Agent] 提取的命令:', cmdJson)
+        } catch (e) {
+            console.warn('[Agent] 命令提取失败，回退到 prompt-inject:', e)
+            return await handlePromptInjectSkill(skill as any, historyMessages, onChunk)
+        }
+
+        // 阶段2：沙箱执行
+        console.log('[Agent] Skill 沙箱执行阶段...')
+        const { currentSession } = useSessionStore()
+        const { activeRole, getFullSystemPrompt } = useRoleStore()
+        const record = await createToolRecord({
+            sessionId: currentSession.value?.id,
+            roleId: activeRole.value.id,
+            toolName: skill.key as string,
+            startTime: Date.now(),
+            params: cmdJson,
+            status: 'pending'
+        })
+
+        const execResult = await executeSkillCommand(
+            skill.key!,
+            cmdJson.command,
+            cmdJson.args,
+            allowedBins
+        )
+
+        await updateToolRecord(record, {
+            endTime: Date.now(),
+            status: execResult.ok ? 'success' : 'error',
+            result: execResult,
+            errorMessage: execResult.ok ? undefined : (execResult.error || execResult.stderr)
+        })
+
+        // 阶段3：将结果注入上下文，生成自然语言回答
+        let resultText: string
+        if (execResult.ok) {
+            resultText = execResult.stdout || '（命令执行成功但无输出）'
+        } else {
+            resultText = `命令执行失败: ${execResult.error || execResult.stderr || '未知错误'}`
+        }
+
+        console.log('[Agent] Skill 执行结果:', resultText.slice(0, 200))
+
+        const answerMessages: LLMMessage[] = [
+            {
+                role: 'system',
+                content: `${getFullSystemPrompt()}\n\n以下是通过外部工具获取的真实数据。请根据数据用自然语言回答用户问题，不要输出 JSON 格式。如果数据中有乱码，尽量提取有用信息。`
+            },
+            ...historyMessages,
+            {
+                role: 'system',
+                content: `【工具执行结果】:\n${resultText}`
+            }
+        ]
+
+        let fullContent = ''
+        await chatStream(answerMessages, {
+            intent: 'simple',
+            onChunk: (chunk, full) => {
+                fullContent = full
+                if (onChunk) onChunk(chunk)
+            }
+        })
+
+        return [{
+            type: 'message',
+            content: fullContent
+        }]
+    }
+
+    /** 知识型 Skill：prompt-inject 模式 */
+    async function handlePromptInjectSkill(
+        skill: any,
+        historyMessages: LLMMessage[],
+        onChunk?: (chunk: string) => void
+    ): Promise<AgentResponse[]> {
+        const { getFullSystemPrompt } = useRoleStore()
+        const systemPrompt = `${getFullSystemPrompt()}
+
+## 当前启用的能力
+
+${skill.skillMeta?.markdownBody || ''}
+
+请根据以上能力描述，帮助用户完成任务。直接用自然语言回答，不要输出 JSON 格式。`
+
+        const chatMessages: LLMMessage[] = [
+            { role: 'system', content: systemPrompt },
+            ...historyMessages
+        ]
+
+        let fullContent = ''
+        await chatStream(chatMessages, {
+            intent: 'complex',
+            onChunk: (chunk, full) => {
+                fullContent = full
+                if (onChunk) onChunk(chunk)
+            }
+        })
+
+        return [{
+            type: 'message',
+            content: fullContent
         }]
     }
 
@@ -499,15 +651,14 @@ export function useAgentLoop() {
             console.log('[Agent] 工具轮数达到上限，强制生成结果')
         }
 
-        // 使用工具专属提示词 + high 模型
-        const toolPromptConfig = TOOL_PROMPTS[toolContext.tool]
+        // 使用工具专属提示词 + high 模型（从角色配置获取）
+        const toolPromptConfig = getToolPromptConfig(toolContext.tool)
         if (!toolPromptConfig) {
             console.warn('[Agent] 未找到工具提示词配置:', toolContext.tool)
             endTool()
             return [{
                 type: 'message',
-                content: '工具配置异常，已退出。',
-                thought: 'tool_error'
+                content: '工具配置异常，已退出。'
             }]
         }
 
@@ -538,8 +689,47 @@ export function useAgentLoop() {
                 const result = JSON.parse(completeMatch[0])
                 console.log('[Agent] 工具完成，返回结果:', result)
 
+                // 记录执行
+                const { currentSession } = useSessionStore()
+                const { activeRole } = useRoleStore()
+                await createToolRecord({
+                    sessionId: currentSession.value?.id,
+                    roleId: activeRole.value.id,
+                    toolName: toolContext.tool,
+                    startTime: Date.now(),
+                    endTime: Date.now(),
+                    params: { history: toolContext.conversationHistory },
+                    result: result,
+                    status: 'success'
+                })
+
                 // 退出内核态
                 endTool()
+
+                // ★ 拦截 web_search
+                if (toolContext.tool === 'web_search' && result.query) {
+                    console.log('[Agent] 开始进行网络检索:', result.query)
+
+                    // 1. 调用真实的服务
+                    const searchResultText = await performWebSearch(result.query)
+
+                    // 2. 构建干净的上下文：只保留用户原始问题，去掉工具内部的 JSON 对话
+                    const userMessages: LLMMessage[] = toolContext.conversationHistory
+                        .filter(m => m.role === 'user')
+                        .map(m => ({ role: 'user' as const, content: m.content }))
+
+                    // 加入搜索结果作为系统上下文
+                    const enhancedHistory: LLMMessage[] = [
+                        ...userMessages,
+                        {
+                            role: 'system',
+                            content: `【互联网检索结果，请结合以下事实信息客观详尽地回答用户问题，并在回答末尾标注参考来源的链接】：\n${searchResultText}`
+                        }
+                    ]
+
+                    // 3. 抛给深度思考模型回答
+                    return await handleComplexChat(enhancedHistory, 'complex', onChunk)
+                }
 
                 // 保存工具结果到对应存储服务
                 saveToolResult(toolContext.tool, result)
@@ -549,8 +739,7 @@ export function useAgentLoop() {
                     type: 'tool_result',
                     tool: toolContext.tool,
                     content: fullContent.replace(completeMatch[0], '').trim() || '分析完成',
-                    resultData: result,
-                    thought: 'tool_complete'
+                    resultData: result
                 }]
             } catch (e) {
                 console.warn('[Agent] 解析工具结果失败:', e)
@@ -560,8 +749,7 @@ export function useAgentLoop() {
         // 未完成，继续对话
         return [{
             type: 'message',
-            content: fullContent,
-            thought: 'tool_conversation'
+            content: fullContent
         }]
     }
 
