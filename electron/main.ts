@@ -1,9 +1,11 @@
 import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, dialog } from 'electron'
-import { join } from 'path'
-import { writeFile } from 'fs/promises'
+import { join, basename } from 'path'
+import { writeFile, copyFile } from 'fs/promises'
 import { logger, LogCategory } from './logger'
 import { handleLoadAllSkills } from './skill-loader'
 import { executeInSandbox } from './sandbox-executor'
+import { taskManager } from './gemini-task-manager'
+import { setupDatabase } from './database'
 
 // 设置独立的用户数据目录，避免与其他 Electron 应用的缓存冲突
 app.setPath('userData', join(app.getPath('appData'), 'Anchor'))
@@ -134,18 +136,29 @@ function updateTrayMenu() {
     tray?.setContextMenu(contextMenu)
 }
 
+let isFirstShow = true
+
 function showWindow() {
     if (!mainWindow) return
 
-    // 计算窗口位置（屏幕右下角）
-    const { screen } = require('electron')
-    const display = screen.getPrimaryDisplay()
+    if (isFirstShow) {
+        // 计算窗口位置（屏幕右下角）
+        const { screen } = require('electron')
+        const display = screen.getPrimaryDisplay()
 
-    const x = display.workArea.x + display.workArea.width - WINDOW_WIDTH - 20
-    const y = display.workArea.y + display.workArea.height - WINDOW_HEIGHT - 20
+        const x = display.workArea.x + display.workArea.width - WINDOW_WIDTH - 20
+        const y = display.workArea.y + display.workArea.height - WINDOW_HEIGHT - 20
 
-    mainWindow.setPosition(x, y)
-    mainWindow.show()
+        mainWindow.setPosition(x, y)
+        isFirstShow = false
+    }
+
+    if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+    } else {
+        mainWindow.show()
+    }
+    
     mainWindow.focus()
     logger.info(LogCategory.WINDOW, '显示窗口')
     updateTrayMenu()
@@ -337,6 +350,31 @@ ipcMain.handle('exec-skill-command', async (_event, { skillKey, command, args, a
     }
 })
 
+// ========== Gemini CLI 异步任务管理 ==========
+
+// 提交任务（立即返回 taskId）
+ipcMain.handle('gemini:submit-task', async (_event, request) => {
+    logger.info(LogCategory.APP, `[Gemini] 收到任务提交，prompt 长度: ${request.prompt?.length || 0}`)
+    try {
+        const result = taskManager.submitTask(request)
+        return result
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `[Gemini] 任务提交失败: ${err.message}`)
+        return { taskId: null, error: err.message }
+    }
+})
+
+// 取消任务
+ipcMain.handle('gemini:cancel-task', async (_event, taskId: string) => {
+    logger.info(LogCategory.APP, `[Gemini] 收到取消请求: ${taskId}`)
+    return taskManager.cancelTask(taskId)
+})
+
+// 查询任务状态
+ipcMain.handle('gemini:get-task-status', async (_event, taskId: string) => {
+    return taskManager.getTaskStatus(taskId)
+})
+
 // ========== LLM 代理功能 (解决 CORS) ==========
 
 const LLM_REQUEST_TIMEOUT = 120_000  // 120 秒超时（大模型首 token 可能较慢）
@@ -444,12 +482,64 @@ ipcMain.handle('llm-rerank', async (_event, { config, body }) => {
 
         return await response.json()
     } catch (err: any) {
-        logger.error(LogCategory.APP, 'Reranker 代理请求失败', err.message)
+        logger.error(LogCategory.APP, `Reranker 代理失败: ${err.message}`)
         throw err
     }
 })
 
-// ========== 文件保存功能 ==========
+// ========== LLM Embedding 代理 (解决 CORS) ==========
+
+ipcMain.handle('llm-embedding', async (_event, { config, body }) => {
+    try {
+        const url = config.baseURL.endsWith('/v1') ? config.baseURL.replace(/\/v1$/, '/v1/embeddings') : `${config.baseURL}/embeddings`
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify(body)
+        })
+
+        if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`Embedding API Error: ${response.status} ${errorText}`)
+        }
+
+        return await response.json()
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `Embedding 代理失败: ${err.message}`)
+        throw err
+    }
+})
+
+// ========== 文件操作相关 ==========
+
+// 打开文件选择器并复制文件到当前工作目录（方便 Gemini 读取）
+ipcMain.handle('select-and-copy-file', async () => {
+    try {
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            title: '选择文件提供给大模型',
+            properties: ['openFile']
+        })
+
+        if (!result.canceled && result.filePaths.length > 0) {
+            const sourcePath = result.filePaths[0]
+            const fileName = basename(sourcePath)
+            const cwd = process.cwd()
+            const destPath = join(cwd, fileName)
+            
+            await copyFile(sourcePath, destPath)
+            
+            logger.info(LogCategory.APP, `成功复制文件: ${sourcePath} -> ${destPath}`)
+            return { success: true, path: destPath, fileName }
+        }
+        return { success: false, canceled: true }
+    } catch (err: any) {
+        logger.error(LogCategory.APP, `复制文件失败: ${err.message}`)
+        return { success: false, error: err.message }
+    }
+})
 
 // JSON 文件保存
 ipcMain.handle('save-json-file', async (_event, fileName: string, content: string) => {
@@ -502,8 +592,14 @@ ipcMain.handle('save-image', async (_event, fileName: string, base64Data: string
 
 app.whenReady().then(() => {
     logger.info(LogCategory.APP, '应用启动', { version: app.getVersion() })
+    setupDatabase()
     createWindow()
     createTray()
+
+    // 初始化 Gemini 任务管理器
+    if (mainWindow) {
+        taskManager.setMainWindow(mainWindow)
+    }
 
     // 注册全局热键 Ctrl+Alt+A
     globalShortcut.register('CommandOrControl+Alt+A', () => {
@@ -535,4 +631,5 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll()
+    taskManager.cleanup()
 })

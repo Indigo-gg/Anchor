@@ -1,16 +1,18 @@
 {
   "name": "anchor",
   "version": "0.1.0",
+  "license": "CC-BY-NC-4.0",
   "description": "正念辅助工具 - 5分钟情绪着陆",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build && electron-builder",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "electron-rebuild"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "11.1.2",
     "dexie": "^4.3.0",
     "gray-matter": "^4.0.3",
     "html2canvas": "^1.4.1",
@@ -21,7 +23,10 @@
     "wink-nlp": "^2.4.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@types/better-sqlite3": "^7.6.13",
     "@vitejs/plugin-vue": "^5.0.0",
+    "copy-webpack-plugin": "^14.0.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
     "typescript": "~5.3.0",

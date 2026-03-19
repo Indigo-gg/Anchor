@@ -230,28 +230,13 @@ export async function getEmbedding(text: string): Promise<number[]> {
     }
 
     try {
-        const url = cstcloud.baseURL.endsWith('/v1')
-            ? cstcloud.baseURL.replace(/\/v1$/, '/v1/embeddings')
-            : `${cstcloud.baseURL}/embeddings`
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${cstcloud.apiKey}`
-            },
-            body: JSON.stringify({
-                model: 'bge-large-zh:latest',
-                input: text
-            })
-        })
-
-        if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`Embedding API Error: ${response.status} ${errorText}`)
+        const body = {
+            model: 'bge-large-zh:latest',
+            input: text
         }
+        
+        const data = await window.electronAPI.llm.embedding({ config: cstcloud, body })
 
-        const data = await response.json()
         if (data.data && data.data[0] && data.data[0].embedding) {
             return data.data[0].embedding
         }

@@ -4,6 +4,7 @@ import type { RoleDefinition } from './role'
 import type { EnergyRecord } from './energy'
 import type { BoundaryRecord } from './boundary'
 import type { ValueSession } from './values'
+import type { MeihuaRecord } from './meihua'
 
 // 定义工具记录的类型 (对应用户的要求)
 export interface ToolRecord {
@@ -25,6 +26,7 @@ export class AnchorAppDatabase extends Dexie {
     energyRecords!: Table<EnergyRecord, string>
     boundaryRecords!: Table<BoundaryRecord, string>
     valuesRecords!: Table<ValueSession, string>
+    meihuaRecords!: Table<MeihuaRecord, string>
     toolRecords!: Table<ToolRecord, string>
 
     constructor() {
@@ -36,6 +38,7 @@ export class AnchorAppDatabase extends Dexie {
             energyRecords: 'id, timestamp, level, activityType',
             boundaryRecords: 'id, timestamp',
             valuesRecords: 'id, timestamp',
+            meihuaRecords: 'id, timestamp',
             toolRecords: 'id, sessionId, roleId, toolName, startTime, status'
         })
     }
@@ -50,12 +53,18 @@ export async function createToolRecord(data: Omit<ToolRecord, 'id' | 'status'> &
         id: `tool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         status: data.status || 'success'
     }
-    await appDb.toolRecords.put(record).catch(e => console.error('[DB] Failed to save tool record:', e))
+    
+    // 取消 Vue 响应式代理，防止 IndexedDB 抛出 DataCloneError
+    const rawRecord = JSON.parse(JSON.stringify(record))
+    await appDb.toolRecords.put(rawRecord).catch(e => console.error('[DB] Failed to save tool record:', e))
     return record
 }
 
 export async function updateToolRecord(record: ToolRecord, updates: Partial<ToolRecord>) {
     Object.assign(record, updates)
-    await appDb.toolRecords.put(record).catch(e => console.error('[DB] Failed to update tool record:', e))
+    
+    // 取消 Vue 响应式代理，防止 IndexedDB 抛出 DataCloneError
+    const rawRecord = JSON.parse(JSON.stringify(record))
+    await appDb.toolRecords.put(rawRecord).catch(e => console.error('[DB] Failed to update tool record:', e))
     return record
 }

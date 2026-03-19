@@ -512,9 +512,10 @@ metadata:
 .sm-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 360px;
+  gap: 12px;
+  max-height: 480px;
   overflow-y: auto;
+  padding-right: 4px; /* 防止滚动条贴得太紧 */
 }
 
 /* ============ 技能卡片 ============ */
@@ -525,6 +526,7 @@ metadata:
   cursor: pointer;
   transition: all var(--transition-fast);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .sm-card:hover {
@@ -541,14 +543,14 @@ metadata:
 .sm-card-main {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 14px;
+  padding: 14px 16px;
 }
 
 .sm-card-icon {
-  font-size: 22px;
-  width: 36px;
-  height: 36px;
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;

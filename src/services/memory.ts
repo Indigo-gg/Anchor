@@ -40,6 +40,7 @@ let isInitialized = false
 // 初始化
 async function init() {
     if (isInitialized) return
+    isInitialized = true
     
     // 数据迁移
     await migrateFromLocalStorage()
@@ -55,7 +56,6 @@ async function init() {
     }
     
     await loadMemories()
-    isInitialized = true
 }
 
 function saveSettings() {
@@ -250,6 +250,18 @@ export function useMemoryStore() {
     if (!isInitialized) {
         init().catch(console.error)
     }
+
+    // 监听角色切换，重新加载对应角色的记忆
+    import('./role').then(({ useRoleStore }) => {
+        const { activeRoleId } = useRoleStore()
+        import('vue').then(({ watch }) => {
+            watch(activeRoleId, (newRole) => {
+                if (newRole) {
+                    loadMemories(newRole).catch(console.error)
+                }
+            })
+        })
+    }).catch(console.error)
 
     return {
         memories,

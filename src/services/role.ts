@@ -7,12 +7,12 @@
 
 import { ref, computed, toRaw } from 'vue'
 import {
-    getToolByKey,
-    getToolsForRole,
-    getRouteToolsDescriptionFromRegistry,
+    getUnifiedToolByKey,
+    getSkillsForRole,
+    getRouteSkillsDescription,
     executeResultHandler,
     getExternalTools,
-    type ToolMeta
+    type UnifiedTool
 } from '@/services/tool-registry'
 import { initSkills, reloadSkills } from '@/services/skill-loader'
 import { appDb } from './db'
@@ -48,22 +48,28 @@ const BUILTIN_ANCHOR: RoleDefinition = {
     name: 'Anchor',
     icon: '⚓',
     color: '#88c999',
-    description: '温暖的正念引导者',
-    systemPrompt: `你是 Anchor，温暖的正念引导者。
+    description: '正念引导、心理疗愈与知识陪伴者',
+    systemPrompt: `你是 Anchor，一个温暖的陪伴者。你不仅是正念与心理疗愈的引导者，也乐于进行知识探讨，或者仅仅是轻松地随便闲聊。
 
-特质：温暖、共情、不说教、先倾听
-风格：像朋友聊天，自然亲切
+特质：温暖、共情、不说教、先倾听、博识且随和
+风格：像朋友聊天，自然亲切，能深聊心理与知识，也能轻松日常闲聊
+
+核心能力：
+1. 【正念与疗愈】提供正念引导、心理疏导与精神陪伴。
+2. 【情绪落地】当用户情绪激动或崩溃时，提供有效的情绪落地与着陆方法（如54321法则、深呼吸等）。
+3. 【知识探讨】乐于就各种话题进行深入浅出的知识探讨，分享见解。
+4. 【随心闲聊】不管用户聊什么日常琐事，都能自然接话，提供情绪价值。
 
 回复原则：
-- 每次回复要完整表达想法，不要话说一半
+- 每次回复要完整表达想法
 - 保持简洁但不要过于精简，该说清楚的要说清楚
-- 2-4句话为宜，复杂话题可以适当多说
+- 2-5句话为宜，复杂话题可以适当多说
 - 不要用列表或格式化输出，就像聊天一样
 
 如果用户情况适合某个工具，可以自然地建议（但不是必须）：
 - 人际边界问题 -> 可以建议"要不我们来梳理一下边界？"
 - 想放松 -> 可以建议"要不一起做个呼吸练习？"
-- 情绪崩溃 -> 可以建议"要不先做个着陆练习？"
+- 情绪崩溃/需要情绪落地 -> 可以建议"要不先做个着陆练习？"
 
 直接回复，不要用 JSON 格式。`,
     toolKeys: ['breathing_guide', 'boundary_mapper', 'emergency_guide', 'energy_audit', 'values_compass', 'web_search', 'image_gen'],
@@ -359,8 +365,45 @@ const BUILTIN_CAREER: RoleDefinition = {
     isBuiltin: true
 }
 
+const BUILTIN_LITERATURE: RoleDefinition = {
+    id: 'literature_master',
+    name: '艺文知音',
+    icon: '🍃',
+    color: '#a68b7c',
+    description: '漫谈文学艺术，共鸣丰盈灵魂',
+    systemPrompt: `你是一位深谙文学与艺术的知音。你积累了深厚的文艺素养，懂文学、影视、音乐与绘画。你的审美有高度，能够欣赏美好的艺术作品，感性而深刻。
+
+核心能力：
+1. 【作品品鉴】在文学、电影、音乐、美术等领域，能给出细腻、专业但不掉书袋的解读与评价。
+2. 【情感共鸣】感情真挚，共情能力极强。面对用户的情感倾诉，能用文学艺术的力量给予温和而有力量的回应。
+3. 【深刻思考】感性但不浮夸，看到事物背后的深层意味。在审美的基础上，有着对人性、生命和生活的深刻洞察。
+4. 【意境传达】谈吐有内涵，语言优美但不矫揉造作。能用充满美感的文字，营造出与讨论话题相符的意境。
+
+风格特质：
+- 温和真挚：像一位在午后书店或画廊与你推心置腹的多年老友。
+- 审美高级：拒绝低俗和套路化的理解，有一套成熟而有品位的审美体系。
+- 深刻内敛：不随意挥霍情绪，情感的表达克制而有张力。
+- 娓娓道来：言语间带着诗意与哲理，让人感到宁静和丰盈。
+
+沟通方式：
+- 常常通过一部电影、一首诗、一幅画或一首曲子来切入话题。
+- 倾听用户对作品或生活的感受，不急于纠正或评判，而是给予理解和升华。
+- 当用户迷茫时，用经典文艺作品中的光影或文句去治愈和启发。
+
+回复原则：
+- 回复要有文学性与美感，避免生硬干瘪的表达。
+- 不要用 JSON 格式，直接进行自然的对话回复。
+- 可以引用诗句或台词，但必须自然贴合语境，决不生搬硬套。`,
+    toolKeys: ['web_search'],
+    useCommonTools: true,
+    memory: true,
+    createdAt: 0,
+    updatedAt: 0,
+    isBuiltin: true
+}
+
 // 所有内置角色（作为默认模板，用于恢复默认）
-const BUILTIN_ROLES: RoleDefinition[] = [BUILTIN_ANCHOR, BUILTIN_WIKI, BUILTIN_HEALTH, BUILTIN_DESTINY, BUILTIN_HISTORY, BUILTIN_PHILOSOPHY, BUILTIN_SOCIETY, BUILTIN_CAREER]
+const BUILTIN_ROLES: RoleDefinition[] = [BUILTIN_ANCHOR, BUILTIN_WIKI, BUILTIN_HEALTH, BUILTIN_DESTINY, BUILTIN_HISTORY, BUILTIN_PHILOSOPHY, BUILTIN_SOCIETY, BUILTIN_CAREER, BUILTIN_LITERATURE]
 
 // ============ 存储 ============
 
@@ -624,42 +667,48 @@ function getFullSystemPrompt(): string {
     return GLOBAL_SYSTEM_PREAMBLE + activeRole.value.systemPrompt
 }
 
-// ============ 工具查询（代理到注册表） ============
+// ============ 工具查询（代理到注册表 V3） ============
 
-/** 获取当前角色的工具列表 */
-function getActiveTools(): ToolMeta[] {
+/** 获取当前角色可用的 Skill 列表 */
+function getActiveTools(): UnifiedTool[] {
     const role = activeRole.value
-    return getToolsForRole(role.id, role.toolKeys, role.useCommonTools)
+    return getSkillsForRole(role.toolKeys)
 }
 
-/** 获取当前角色某个工具的配置 */
-function getToolConfig(toolKey: string): ToolMeta | undefined {
-    // 先检查当前角色是否有权限使用该工具
-    const tools = getActiveTools()
-    return tools.find(t => t.key === toolKey)
+/** 获取指定 Skill 的统一配置 */
+function getToolConfig(toolKey: string): UnifiedTool | undefined {
+    // 规范化 key: 非 skill_ 前缀的自动补上
+    const normalizedKey = toolKey.startsWith('skill_') ? toolKey : `skill_${toolKey}`
+    return getUnifiedToolByKey(normalizedKey)
 }
 
-/** 获取工具确认消息 */
+/** 获取 Skill 确认消息 */
 function getToolConfirmMessage(toolKey: string): string {
-    const tool = getToolByKey(toolKey)
-    return tool?.confirmMessage || `我觉得「${toolKey}」可能对你有帮助。要试试吗？`
+    const normalizedKey = toolKey.startsWith('skill_') ? toolKey : `skill_${toolKey}`
+    const tool = getUnifiedToolByKey(normalizedKey)
+    return tool?.skillMeta?.kernelConfig?.confirmMessage || `我觉得「${toolKey}」可能对你有帮助。要试试吗？`
 }
 
-/** 获取工具欢迎语 */
+/** 获取 Skill 欢迎语 */
 function getToolWelcomeMsg(toolKey: string): string {
-    const tool = getToolByKey(toolKey)
-    return tool?.welcomeMessage || '好的，我们开始吧。先说说你的具体情况？'
+    const normalizedKey = toolKey.startsWith('skill_') ? toolKey : `skill_${toolKey}`
+    const tool = getUnifiedToolByKey(normalizedKey)
+    return tool?.skillMeta?.kernelConfig?.welcomeMessage || '好的，我们开始吧。先说说你的具体情况？'
 }
 
-/** 生成意图路由可用工具描述 */
+/** 生成意图路由可用 Skill 描述 */
 function getRouteToolsDescription(): string {
     const role = activeRole.value
-    return getRouteToolsDescriptionFromRegistry(role.toolKeys, role.id, role.useCommonTools)
+    return getRouteSkillsDescription(role.toolKeys)
 }
 
-/** 保存工具结果 */
+/** 保存工具结果（通过 handlerKey 分发） */
 function saveToolResult(tool: string, result: Record<string, unknown>) {
-    executeResultHandler(tool, result)
+    // 尝试从 skill 配置中获取 handlerKey，如果没有则用 tool 名本身
+    const normalizedKey = tool.startsWith('skill_') ? tool : `skill_${tool}`
+    const skill = getUnifiedToolByKey(normalizedKey)
+    const handlerKey = skill?.skillMeta?.kernelConfig?.handlerKey || skill?.skillMeta?.handlerKey || tool
+    executeResultHandler(handlerKey, result)
 }
 
 // ============ 持久化 ============

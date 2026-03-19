@@ -7,9 +7,10 @@
  * 3. 严格的角色隔离
  */
 
-import Dexie, { type Table } from 'dexie'
+import Dexie from 'dexie'
 // @ts-ignore
 import bm25 from 'wink-bm25-text-search'
+import { getEmbedding, rerank } from './llm'
 
 export type MemoryDocType = 'fact' | 'pattern' | 'episode' | 'summary' | 'tool' | 'profile'
 
@@ -26,19 +27,49 @@ export interface MemoryDocument {
     metadata?: Record<string, unknown>  // 扩展字段
 }
 
-export class MemoryDatabase extends Dexie {
-    memories!: Table<MemoryDocument, string>
+declare const window: any;
 
-    constructor() {
-        super('AnchorMemoryDatabase')
-        // roleId 和 type 都是常用的检索维度
-        this.version(1).stores({
+// ============ 数据迁移 (Dexie -> SQLite) ============
+
+export async function migrateFromDexie() {
+    const migratedKey = 'anchor_memories_sqlite_migrated'
+    if (localStorage.getItem(migratedKey)) return
+
+    try {
+        const dexieDb = new Dexie('AnchorMemoryDatabase')
+        dexieDb.version(1).stores({
             memories: 'id, roleId, [roleId+type], createdAt'
         })
+        
+        // Wait for dexie to be ready to check if table exists and has records
+        if (!dexieDb.tables.find(t => t.name === 'memories')) {
+            localStorage.setItem(migratedKey, 'true')
+            return
+        }
+
+        const count = await dexieDb.table('memories').count()
+        if (count === 0) {
+            localStorage.setItem(migratedKey, 'true')
+            return
+        }
+        
+        console.log(`[MemoryStore] 发现 Dexie 历史数据 ${count} 条，准备迁移到 SQLite...`)
+        const allDocs = await dexieDb.table('memories').toArray()
+        for (const doc of allDocs) {
+            // Because addMemory API accepts full memory object
+            await window.electronAPI.db.addMemory(doc)
+        }
+        console.log('[MemoryStore] SQLite 迁移成功，清理旧数据库。')
+        await dexieDb.delete() // Drop the Dexie database
+        localStorage.setItem(migratedKey, 'true')
+    } catch (e) {
+        console.warn('[MemoryStore] 迁移到 SQLite 跳过或失败:', e)
+        localStorage.setItem(migratedKey, 'true') // skip next time
     }
 }
 
-export const db = new MemoryDatabase()
+// 启动时自动迁移
+migrateFromDexie().catch(console.error)
 
 // ============ BM25 内存索引引擎 ============
 
@@ -72,7 +103,7 @@ function createEngine() {
 export async function ensureRoleIndexLoaded(roleId: string) {
     if (loadedRoles.has(roleId)) return
 
-    const docs = await db.memories.where('roleId').equals(roleId).toArray()
+    const docs = await getMemoriesByRole(roleId)
 
     const engine = createEngine()
 
@@ -105,7 +136,7 @@ export async function addMemoryDocument(doc: Omit<MemoryDocument, 'id' | 'create
         createdAt: Date.now()
     }
     
-    await db.memories.add(memory)
+    await window.electronAPI.db.addMemory(memory)
     
     // 如果该角色的索引已加载，追加到索引中
     if (loadedRoles.has(doc.roleId)) {
@@ -123,12 +154,18 @@ export async function addMemoryDocument(doc: Omit<MemoryDocument, 'id' | 'create
 
 /** 获取某个角色的所有记忆 */
 export async function getMemoriesByRole(roleId: string): Promise<MemoryDocument[]> {
-    return await db.memories.where('roleId').equals(roleId).reverse().sortBy('createdAt')
+    const records = await window.electronAPI.db.getMemories(roleId)
+    return records.map((r: any) => ({
+        ...r,
+        tags: r.tags ? JSON.parse(r.tags) : [],
+        embedding: r.embedding ? JSON.parse(r.embedding) : undefined,
+        metadata: r.metadata ? JSON.parse(r.metadata) : undefined
+    }))
 }
 
 /** 删除记忆（需重建角色的 BM25 索引） */
 export async function deleteMemoryDocument(id: string, roleId: string) {
-    await db.memories.delete(id)
+    await window.electronAPI.db.deleteMemory(id, roleId)
     
     // 清除内存索引标志，下次搜索时自动重建
     loadedRoles.delete(roleId)
@@ -137,9 +174,7 @@ export async function deleteMemoryDocument(id: string, roleId: string) {
 
 /** 清空指定角色的所有记忆 */
 export async function clearMemoriesByRole(roleId: string) {
-    const docs = await db.memories.where('roleId').equals(roleId).toArray()
-    const ids = docs.map(d => d.id)
-    await db.memories.bulkDelete(ids)
+    await window.electronAPI.db.clearMemories(roleId)
     
     loadedRoles.delete(roleId)
     bmeEngines.delete(roleId)
@@ -165,7 +200,8 @@ export async function searchMemoriesByBM25(query: string, roleId: string, limit:
     
     const ids = results.map(r => r[0])
     // IndexedDB 的 bulkGet 不保证顺序，需要自己排序
-    const docs = await db.memories.bulkGet(ids)
+    const allRoleDocs = await getMemoriesByRole(roleId)
+    const docs = allRoleDocs.filter(d => ids.includes(d.id))
     
     // 只返回找到的文档，并按 BM25 分数排序
     const validDocs = docs.filter(d => Boolean(d)) as MemoryDocument[]
@@ -230,7 +266,6 @@ function cosineSimilarity(A: number[], B: number[]): number {
 }
 
 // 基于 Embedding 的向量检索
-import { getEmbedding, rerank } from './llm'
 
 export async function searchMemoriesByVector(query: string, roleId: string, limit: number = 20): Promise<{doc: MemoryDocument, score: number}[]> {
     const docs = await getMemoriesByRole(roleId)

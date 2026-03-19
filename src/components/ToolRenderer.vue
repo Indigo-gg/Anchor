@@ -58,6 +58,13 @@
       v-bind="params as any"
       @complete="$emit('complete')"
     />
+
+    <!-- 梅花心易占卜 -->
+    <MeihuaDivination
+      v-else-if="tool === 'meihua_divination'"
+      v-bind="params as any"
+      @complete="$emit('complete')"
+    />
     
     <!-- 未实现的工具占位 -->
     <div v-else class="tool-placeholder">
@@ -78,6 +85,7 @@ import ValuesQuiz from './tools/ValuesQuiz.vue'
 import ValuesResult from './tools/ValuesResult.vue'
 import BoundaryMapper from './tools/BoundaryMapper.vue'
 import BoundaryResult from './tools/BoundaryResult.vue'
+import MeihuaDivination from './tools/MeihuaDivination.vue'
 import { useValuesStore } from '@/services/values'
 
 const props = defineProps<{

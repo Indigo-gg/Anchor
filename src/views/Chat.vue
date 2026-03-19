@@ -52,6 +52,17 @@
             <span class="tool-badge">{{ getToolIcon(msg.tool) }}</span>
             <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
           </div>
+          <!-- Gemini 异步任务卡片 -->
+          <div v-else-if="msg.geminiTaskId" class="gemini-task-card">
+            <div class="task-card-header">
+              <span class="task-icon">🤖</span>
+              <span class="task-status" :class="msg.geminiTaskStatus || 'running'">{{ getTaskStatusLabel(msg.geminiTaskStatus) }}</span>
+            </div>
+            <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+            <div class="task-card-footer" v-if="msg.geminiTaskStatus === 'running' || !msg.geminiTaskStatus">
+              <button class="cancel-task-btn" @click="cancelGeminiTask(msg.geminiTaskId)">⭕ 取消任务</button>
+            </div>
+          </div>
           <!-- Markdown 渲染的文本 -->
           <div v-else class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
         </div>
@@ -74,6 +85,9 @@
 
     <!-- 输入区域 -->
     <div class="input-area no-drag">
+      <button class="upload-btn" @click="handleUploadFile" title="上传外部文件到当前工作区">
+        📎
+      </button>
       <textarea
         ref="inputRef"
         v-model="inputText"
@@ -139,7 +153,7 @@ import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked, Renderer } from 'marked'
 import ToolRenderer from '@/components/ToolRenderer.vue'
 import MessageContextMenu from '@/components/MessageContextMenu.vue'
-import { useAgentLoop, confirmTool, cancelToolConfirm } from '@/agents/react-agent'
+import { useAgentLoop, confirmTool, cancelToolConfirm, setupGeminiTaskListener } from '@/agents/react-agent'
 import { useSessionStore } from '@/services/session'
 import { useInputBridge } from '@/services/input-bridge'
 import { compressHistory } from '@/services/llm'
@@ -166,10 +180,13 @@ interface Message {
   tool?: string
   toolParams?: Record<string, unknown>
   imageUrl?: string
-  // 新增：工具消息类型
+  // 工具消息类型
   isToolStart?: boolean      // 工具启动消息
   isToolResult?: boolean     // 工具结果消息
   toolResultData?: Record<string, unknown>    // 工具结果数据
+  // Gemini 异步任务
+  geminiTaskId?: string         // Gemini 任务 ID
+  geminiTaskStatus?: string     // 任务状态 (running/completed/failed/cancelled)
   timestamp?: number            // 时间戳
 }
 
@@ -401,6 +418,13 @@ async function sendMessage() {
       // 用户确认，执行工具
       const pending = confirmTool()
       if (pending) {
+        if (pending.tool === 'gemini_cli') {
+          // Gemini CLI 特殊处理：重新发给 agent 执行
+          awaitingConfirm.value = false
+          await processNormalMessage(text)
+          scrollToBottom()
+          return
+        }
         const toolMsg = {
           id: generateMessageId(),
           role: 'assistant' as const,
@@ -448,6 +472,19 @@ async function sendMessage() {
   inputText.value = ''
 
   await processNormalMessage(text)
+}
+
+async function handleUploadFile() {
+  try {
+    const result = await window.electronAPI?.selectAndCopyFile()
+    if (result && result.success && result.path) {
+      const addedText = `[已上传文件: ${result.path}] `
+      inputText.value = (inputText.value ? inputText.value + '\n' : '') + addedText
+      nextTick(() => inputRef.value?.focus())
+    }
+  } catch (error) {
+    console.error('上传文件失败:', error)
+  }
 }
 
 /** 中止当前回答 */
@@ -573,6 +610,18 @@ async function processNormalMessage(text: string) {
         }
         messages.value.push(resultMsg)
         addMessage(resultMsg)
+      } else if ((response as any).type === 'gemini_task') {
+        // Gemini 异步任务卡片
+        const taskMsg = {
+          id: generateMessageId(),
+          role: 'assistant' as const,
+          content: response.content || '',
+          geminiTaskId: response.params?.taskId as string,
+          geminiTaskStatus: 'running',
+          timestamp: Date.now()
+        }
+        messages.value.push(taskMsg)
+        addMessage(taskMsg)
       } else if (response.type === 'image' && response.imageUrl) {
         // 图片消息
         const imageMsg = {
@@ -694,6 +743,34 @@ function loadFromSession() {
   streamingContent.value = ''
 }
 
+// Gemini 任务状态标签
+function getTaskStatusLabel(status?: string): string {
+  const labels: Record<string, string> = {
+    running: '执行中...',
+    completed: '✅ 已完成',
+    failed: '❌ 失败',
+    cancelled: '⭕ 已取消',
+    timeout: '⏰ 超时',
+  }
+  return labels[status || 'running'] || '执行中...'
+}
+
+// 取消 Gemini 任务
+async function cancelGeminiTask(taskId?: string) {
+  if (!taskId) return
+  try {
+    await window.electronAPI.gemini.cancelTask(taskId)
+    // 更新消息卡片状态
+    const msg = messages.value.find(m => m.geminiTaskId === taskId)
+    if (msg) {
+      msg.geminiTaskStatus = 'cancelled'
+      msg.content = msg.content.replace('正在后台执行...', '已取消')
+    }
+  } catch (e) {
+    console.error('取消任务失败:', e)
+  }
+}
+
 // 为现有消息补充 ID（向后兼容）
 onMounted(() => {
   messages.value.forEach(msg => {
@@ -702,6 +779,57 @@ onMounted(() => {
       msg.timestamp = msg.timestamp || Date.now()
     }
   })
+
+  // 初始化 Gemini 异步任务事件监听
+  setupGeminiTaskListener()
+
+  // 监听 Gemini 任务状态更新
+  window.electronAPI?.gemini?.onTaskEvent?.((event: string, data: any) => {
+    const taskId = data?.taskId
+    if (!taskId) return
+
+    // 更新对应任务卡片的状态
+    const taskMsg = messages.value.find(m => m.geminiTaskId === taskId)
+    if (taskMsg) {
+      if (event === 'completed') {
+        taskMsg.geminiTaskStatus = 'completed'
+        taskMsg.content = taskMsg.content.replace('正在后台执行...', '已完成 ✅')
+      } else if (event === 'failed') {
+        taskMsg.geminiTaskStatus = 'failed'
+        taskMsg.content = taskMsg.content.replace('正在后台执行...', '失败 ❌')
+      } else if (event === 'cancelled') {
+        taskMsg.geminiTaskStatus = 'cancelled'
+        taskMsg.content = taskMsg.content.replace('正在后台执行...', '已取消')
+      }
+    }
+  })
+
+  // 监听 Gemini 异步结果推入对话流
+  window.addEventListener('gemini-result-ready', ((e: CustomEvent) => {
+    const { message, sessionId } = e.detail
+    if (message) {
+      const resultMsg = {
+        id: generateMessageId(),
+        role: 'assistant' as const,
+        content: message.content || '',
+        timestamp: Date.now()
+      }
+      
+      const { currentSession, addMessageToSession } = useSessionStore()
+      if (sessionId && currentSession.value?.id !== sessionId) {
+          // 非当前会话，静默写入对应的数据库记录
+          addMessageToSession(sessionId, resultMsg).then(() => {
+              console.log(`[Chat] 后台任务完成，结果已写入历史会话: ${sessionId}`)
+              // 如果有全局通知组件（比如 ElMessage），可以在这里调用
+          })
+      } else {
+          // 是当前会话，正常上屏展示
+          messages.value.push(resultMsg)
+          addMessage(resultMsg)
+          scrollToBottom()
+      }
+    }
+  }) as EventListener)
 
   // 拦截消息区域中的链接点击，在系统浏览器打开
   messageListRef.value?.addEventListener('click', (e: MouseEvent) => {
@@ -917,14 +1045,84 @@ watch(messages, scrollToBottom, { deep: true })
   padding: 8px 0;
 }
 
+/* Gemini 异步任务卡片 */
+.gemini-task-card {
+  padding: 4px 0;
+}
+
+.task-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-icon {
+  font-size: 18px;
+}
+
+.task-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.task-status.running {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  animation: pulse-status 2s ease-in-out infinite;
+}
+
+.task-status.completed {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.task-status.failed,
+.task-status.timeout {
+  background: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.task-status.cancelled {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+}
+
+@keyframes pulse-status {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.task-card-footer {
+  margin-top: 8px;
+}
+
+.cancel-task-btn {
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #f87171;
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cancel-task-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
 /* Markdown 样式 */
 .markdown-body {
-  font-size: inherit;
+  font-size: var(--base-font-size, 14.5px);
   line-height: 1.65;
 }
 
 .streaming-text {
-  font-size: inherit;
+  font-size: var(--base-font-size, 14.5px);
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -953,6 +1151,24 @@ watch(messages, scrollToBottom, { deep: true })
   border-radius: 4px;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.markdown-body :deep(pre) {
+  overflow-x: hidden;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 12px;
+  border-radius: 8px;
+  margin: 8px 0;
+  max-width: 100%;
+}
+
+.markdown-body :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  word-break: break-all;
+  white-space: pre-wrap;
 }
 
 .markdown-body :deep(ul), .markdown-body :deep(ol) {
@@ -1076,13 +1292,35 @@ watch(messages, scrollToBottom, { deep: true })
   border-radius: var(--radius-md);
   padding: 12px 16px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--base-font-size, 14.5px);
   line-height: 1.4;
 }
 
 .input-area textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--shadow-glow);
+}
+
+.upload-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  font-size: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-hover);
 }
 
 .input-area textarea::placeholder {

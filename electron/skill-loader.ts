@@ -1,6 +1,9 @@
 /**
  * 主进程 Skill 加载器
- * 负责扫描本地文件系统并返回解析后的 Skill 数据
+ * 
+ * V3: 统一加载内置工具 + 外部 Skill
+ * 所有能力均以 SKILL.md 文件形式定义在 skills/ 目录下，
+ * 通过 frontmatter 字段区分 execMode (kernel / instant / command / prompt-inject)
  */
 
 import fs from 'fs'
@@ -10,6 +13,11 @@ import { app } from 'electron'
 
 // ============ 类型定义 ============
 
+interface SkillTrigger {
+    keywords?: string[]
+    description: string
+}
+
 interface SkillManifest {
     name: string
     description: string
@@ -17,12 +25,28 @@ interface SkillManifest {
         openclaw?: {
             emoji?: string
             os?: string[]
+            exec_mode?: string
+            max_turns?: number
+            confirm_message?: string
+            welcome_message?: string
+            has_result_handler?: boolean
+            handler_key?: string
+            trigger?: SkillTrigger
             requires?: {
                 bins?: string[]
                 env?: string[]
             }
         }
     }
+}
+
+/** Kernel 模式配置 */
+export interface KernelConfig {
+    maxTurns: number
+    confirmMessage: string
+    welcomeMessage: string
+    hasResultHandler: boolean
+    handlerKey?: string
 }
 
 /** 对应渲染进程中的 UnifiedTool 结构 */
@@ -32,11 +56,14 @@ export interface SkillData {
     icon: string
     description: string
     source: string
-    execMode: string
+    execMode: string          // 'kernel' | 'instant' | 'command' | 'prompt-inject'
     skillMeta: {
         markdownBody: string
         requires?: any
         platform?: string[]
+        trigger?: SkillTrigger
+        kernelConfig?: KernelConfig
+        handlerKey?: string   // instant 类型的处理器标识
     }
 }
 
@@ -46,8 +73,6 @@ function getBuiltinSkillsDir(): string {
     if (!app.isPackaged) {
         return path.resolve(process.cwd(), 'skills')
     }
-    // 打包后，skills 目录通常在 resources 目录下
-    // 假设 electron-builder 配置将其复制到了相应位置
     return path.join(process.resourcesPath, 'skills')
 }
 
@@ -68,23 +93,43 @@ function loadSkill(skillDir: string): SkillData | null {
 
         if (!manifest.name) return null
 
+        const oc = manifest.metadata?.openclaw
+
         // 平台检查
-        const platform = manifest.metadata?.openclaw?.os
+        const platform = oc?.os
         if (platform && platform.length > 0 && !platform.includes(process.platform)) {
             return null
+        }
+
+        // 解析 exec_mode，默认 prompt-inject（向后兼容）
+        const execMode = oc?.exec_mode || 'prompt-inject'
+
+        // 构建 kernel 配置（仅 kernel 类型需要）
+        let kernelConfig: KernelConfig | undefined
+        if (execMode === 'kernel') {
+            kernelConfig = {
+                maxTurns: oc?.max_turns || 3,
+                confirmMessage: oc?.confirm_message || '要开始吗？',
+                welcomeMessage: oc?.welcome_message || '好的，我们开始。',
+                hasResultHandler: oc?.has_result_handler || false,
+                handlerKey: oc?.handler_key,
+            }
         }
 
         return {
             key: `skill_${manifest.name}`,
             name: manifest.description || manifest.name,
-            icon: manifest.metadata?.openclaw?.emoji || '🔧',
+            icon: oc?.emoji || '🔧',
             description: manifest.description || '',
             source: 'openclaw-skill',
-            execMode: 'prompt-inject',
+            execMode,
             skillMeta: {
                 markdownBody: content.trim(),
-                requires: manifest.metadata?.openclaw?.requires,
-                platform: manifest.metadata?.openclaw?.os,
+                requires: oc?.requires,
+                platform: oc?.os,
+                trigger: oc?.trigger,
+                kernelConfig,
+                handlerKey: oc?.handler_key,
             }
         }
     } catch (e) {
@@ -96,7 +141,6 @@ function loadSkill(skillDir: string): SkillData | null {
 function loadSkillsFromDir(dir: string): SkillData[] {
     const skills: SkillData[] = []
     if (!fs.existsSync(dir)) {
-        // 如果目录不存在，尝试创建（仅针对用户目录）
         try {
             if (dir.includes('userData')) fs.mkdirSync(dir, { recursive: true })
         } catch {}
@@ -127,7 +171,7 @@ export function handleLoadAllSkills(): SkillData[] {
     const builtinSkills = loadSkillsFromDir(builtinDir)
     const userSkills = loadSkillsFromDir(userDir)
 
-    // 合并并去重
+    // 合并并去重（用户目录优先覆盖内置）
     const merged = new Map<string, SkillData>()
     for (const s of builtinSkills) merged.set(s.key, s)
     for (const s of userSkills) merged.set(s.key, s)

@@ -69,45 +69,23 @@
             />
           </section>
 
-          <!-- 🛠️ 工具配置 -->
+          <!-- 🛠️ Skill 配置 -->
           <section class="form-section">
-            <label class="form-label">🛠️ 内置工具</label>
-            <div class="tool-list">
-              <label
-                v-for="tool in selectableTools"
-                :key="tool.key"
-                class="tool-item"
-              >
-                <div class="tool-info">
-                  <span class="tool-icon">{{ tool.icon }}</span>
-                  <span class="tool-name">{{ tool.name }}</span>
-                  <span class="tool-desc">{{ tool.description }}</span>
-                </div>
-                <input
-                  type="checkbox"
-                  :checked="form.toolKeys.includes(tool.key)"
-                  @change="toggleTool(tool.key)"
-                />
-              </label>
-            </div>
-          </section>
-
-          <!-- 🔌 外部能力 (OpenClaw Skills) -->
-          <section v-if="externalSkills.length > 0" class="form-section">
             <div class="section-header">
-              <label class="form-label">🔌 外部能力 (Skills)</label>
+              <label class="form-label">🧩 技能插件</label>
               <button class="refresh-btn" @click="handleRefreshSkills" title="刷新">↻</button>
             </div>
             <div class="tool-list">
               <label
-                v-for="skill in externalSkills"
+                v-for="skill in allSkills"
                 :key="skill.key"
                 class="tool-item"
               >
                 <div class="tool-info">
                   <span class="tool-icon">{{ skill.icon }}</span>
                   <span class="tool-name">{{ skill.name }}</span>
-                  <span class="tool-desc skill-badge">Skill</span>
+                  <span class="tool-desc">{{ skill.description }}</span>
+                  <span v-if="skill.execMode !== 'prompt-inject'" class="skill-badge">{{ skill.execMode }}</span>
                 </div>
                 <input
                   type="checkbox"
@@ -157,7 +135,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
 import { useRoleStore, type RoleDefinition } from '@/services/role'
-import { getSelectableToolsForRole, getExternalTools, type UnifiedTool } from '@/services/tool-registry'
+import { getAllTools, type UnifiedTool } from '@/services/tool-registry'
 import { reloadSkills } from '@/services/skill-loader'
 
 const props = defineProps<{
@@ -173,18 +151,12 @@ const { createRole, updateRole, deleteRole, resetBuiltinRole } = useRoleStore()
 
 const isEditing = computed(() => !!props.editingRole)
 
-// 获取可选工具列表
-const selectableTools = computed(() => {
-  const roleId = props.editingRole?.id || 'new_role'
-  return getSelectableToolsForRole(roleId)
-})
+// V3: 统一 Skill 列表
+const allSkills = ref<UnifiedTool[]>(getAllTools())
 
-// V2: 获取外部 Skills 列表
-const externalSkills = ref<UnifiedTool[]>(getExternalTools())
-
-function handleRefreshSkills() {
-  const skills = reloadSkills()
-  externalSkills.value = skills
+async function handleRefreshSkills() {
+  await reloadSkills()
+  allSkills.value = getAllTools()
 }
 
 const form = reactive({

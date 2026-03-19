@@ -50,6 +50,7 @@ export interface Session {
     compressedHistory: string[]  // 压缩后的历史摘要
     roundCount: number  // 对话轮数计数
     contextWindowStart: number  // 上下文窗口起始索引（压缩后前移）
+    toolContext?: ToolContext  // 当前会话独占的工具上下文（内核态）
 }
 
 import { appDb } from './db'
@@ -75,9 +76,6 @@ const currentSession = ref<Session | null>(null)
 
 // 历史会话列表
 const sessions = ref<Session[]>([])
-
-// 工具上下文（内核态）
-const activeToolContext = ref<ToolContext | null>(null)
 
 // 初始化标识，避免重复启动
 let isInitializing = false
@@ -261,6 +259,25 @@ function addMessage(message: Omit<SessionMessage, 'timestamp'>) {
     saveCurrentSession()
 }
 
+// 跨会话追加消息（用于异步工具回调写入）
+async function addMessageToSession(sessionId: string, message: Omit<SessionMessage, 'timestamp'>) {
+    if (currentSession.value?.id === sessionId) {
+        addMessage(message)
+        return
+    }
+    const target = sessions.value.find(s => s.id === sessionId)
+    if (target) {
+        target.messages.push({ ...message, timestamp: Date.now() })
+        saveSessions([target])
+        return
+    }
+    const dbSession = await appDb.sessions.get(sessionId)
+    if (dbSession) {
+        dbSession.messages.push({ ...message, timestamp: Date.now() })
+        await appDb.sessions.put(dbSession)
+    }
+}
+
 // 检查是否需要压缩
 function shouldCompress(): boolean {
     if (!currentSession.value) return false
@@ -387,7 +404,8 @@ export function formatTime(timestamp: number): string {
  * 进入工具模式（内核态）
  */
 function startTool(tool: string, systemPrompt: string, maxTurns: number = 3) {
-    activeToolContext.value = {
+    if (!currentSession.value) return
+    currentSession.value.toolContext = {
         tool,
         phase: 'active',
         turnCount: 0,
@@ -395,6 +413,7 @@ function startTool(tool: string, systemPrompt: string, maxTurns: number = 3) {
         systemPrompt,
         conversationHistory: []
     }
+    saveCurrentSession()
     console.log(`[Session] 进入内核态: ${tool}`)
 }
 
@@ -402,9 +421,10 @@ function startTool(tool: string, systemPrompt: string, maxTurns: number = 3) {
  * 退出工具模式（返回用户态）
  */
 function endTool() {
-    if (activeToolContext.value) {
-        console.log(`[Session] 退出内核态: ${activeToolContext.value.tool}`)
-        activeToolContext.value = null
+    if (currentSession.value?.toolContext) {
+        console.log(`[Session] 退出内核态: ${currentSession.value.toolContext.tool}`)
+        currentSession.value.toolContext = undefined
+        saveCurrentSession()
     }
 }
 
@@ -412,33 +432,34 @@ function endTool() {
  * 是否在工具模式（内核态）
  */
 function isInToolMode(): boolean {
-    return activeToolContext.value !== null
+    return currentSession.value?.toolContext !== undefined && currentSession.value?.toolContext !== null
 }
 
 /**
  * 获取当前工具上下文
  */
 function getToolContext(): ToolContext | null {
-    return activeToolContext.value
+    return currentSession.value?.toolContext || null
 }
 
 /**
  * 添加工具对话消息
  */
 function addToolMessage(role: 'user' | 'assistant', content: string) {
-    if (!activeToolContext.value) return
-    activeToolContext.value.conversationHistory.push({ role, content })
+    if (!currentSession.value?.toolContext) return
+    currentSession.value.toolContext.conversationHistory.push({ role, content })
     if (role === 'user') {
-        activeToolContext.value.turnCount++
+        currentSession.value.toolContext.turnCount++
     }
+    saveCurrentSession()
 }
 
 /**
  * 检查工具是否应该结束（轮数限制）
  */
 function shouldToolEnd(): boolean {
-    if (!activeToolContext.value) return false
-    return activeToolContext.value.turnCount >= activeToolContext.value.maxTurns
+    if (!currentSession.value?.toolContext) return false
+    return currentSession.value.toolContext.turnCount >= currentSession.value.toolContext.maxTurns
 }
 
 // 获取某角色的历史会话
@@ -477,10 +498,10 @@ function restoreLatestSession(roleId: string) {
          sessions.value = sessions.value.filter(s => s.id !== currentSession.value!.id)
     }
 
-    // 查找目标角色最近的会话
+    // 查找目标角色最近的 **未归档** 会话（有 endTime 表示已归档）
     const roleSessions = sessions.value
-        .filter(s => s.roleId === roleId)
-        .sort((a, b) => (b.endTime || b.startTime) - (a.endTime || a.startTime))
+        .filter(s => s.roleId === roleId && !s.endTime)
+        .sort((a, b) => b.startTime - a.startTime)
 
     if (roleSessions.length > 0) {
         // 恢复最近会话（从列表中找到它并置于第一位，不再删除它而是把它设为 current）
@@ -517,10 +538,10 @@ export function useSessionStore() {
     return {
         currentSession,
         sessions,
-        activeToolContext,
         sessionSettings,
         startNewSession,
         addMessage,
+        addMessageToSession,
         getSession,
         deleteSession,
         formatTime,
