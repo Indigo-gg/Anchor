@@ -278,6 +278,20 @@ async function addMessageToSession(sessionId: string, message: Omit<SessionMessa
     }
 }
 
+// 更新消息的工具上下文（用于标记工具完成并渲染结果）
+function updateMessageToolContext(timestamp: number, toolContextUpdates: Partial<SessionMessage['toolContext']>) {
+    if (!currentSession.value) return
+    const msg = currentSession.value.messages.find(m => m.timestamp === timestamp)
+    if (msg) {
+        msg.toolContext = {
+            ...msg.toolContext,
+            tool: msg.toolContext?.tool || msg.tool || '',
+            ...toolContextUpdates
+        }
+        saveCurrentSession()
+    }
+}
+
 // 检查是否需要压缩
 function shouldCompress(): boolean {
     if (!currentSession.value) return false
@@ -528,6 +542,49 @@ function restoreLatestSession(roleId: string) {
     }
 }
 
+// 导出所有会话备份
+async function exportAllSessions() {
+    const allSessions = await appDb.sessions.toArray()
+    const exportData = {
+        version: '1.0',
+        exportTime: Date.now(),
+        type: 'anchor_sessions_backup',
+        sessions: allSessions
+    }
+    return JSON.stringify(exportData, null, 2)
+}
+
+// 导入会话备份
+async function importSessions(jsonData: string) {
+    try {
+        const data = JSON.parse(jsonData)
+        if (data.type !== 'anchor_sessions_backup' || !Array.isArray(data.sessions)) {
+            throw new Error('无效的备份文件格式')
+        }
+        
+        let importedCount = 0
+        let skippedCount = 0
+        
+        for (const session of data.sessions) {
+            const existing = await appDb.sessions.get(session.id)
+            if (existing) {
+                skippedCount++
+            } else {
+                await appDb.sessions.put(session)
+                importedCount++
+            }
+        }
+        
+        // 重新加载历史会话列表
+        sessions.value = await appDb.sessions.orderBy('startTime').reverse().toArray()
+        
+        return { success: true, importedCount, skippedCount }
+    } catch (e) {
+        console.error('导入会话失败:', e)
+        return { success: false, error: e instanceof Error ? e.message : '未知错误' }
+    }
+}
+
 // 导出 composable
 export function useSessionStore() {
     // 首次使用时初始化
@@ -542,8 +599,11 @@ export function useSessionStore() {
         startNewSession,
         addMessage,
         addMessageToSession,
+        updateMessageToolContext,
         getSession,
         deleteSession,
+        exportAllSessions,
+        importSessions,
         formatTime,
         shouldCompress,
         addCompressedSummary,

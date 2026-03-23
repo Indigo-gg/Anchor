@@ -4,7 +4,7 @@ description: "情绪觉察与命理转化"
 metadata:
   openclaw:
     emoji: "☯"
-    exec_mode: kernel
+    exec_mode: ui
     max_turns: 4
     confirm_message: "我感受到你内心的纠结。如果你愿意，我们可以用\"心易照见\"的直觉方法，看看当下的时空会给你什么启迪。起一卦试试吗？"
     welcome_message: "好的，让我们开始。"

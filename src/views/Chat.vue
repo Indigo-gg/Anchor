@@ -36,10 +36,11 @@
             <ToolRenderer 
               :tool="msg.tool" 
               :params="msg.toolResultData || {}" 
+              :restored="!!msg.restored"
             />
           </div>
           <!-- 旧的工具渲染器（兼容） -->
-          <ToolRenderer v-else-if="msg.tool && !msg.isToolStart && !msg.isToolResult" :tool="msg.tool" :params="msg.toolParams" />
+          <ToolRenderer v-else-if="msg.tool && !msg.isToolStart && !msg.isToolResult" :tool="msg.tool" :params="msg.toolParams" :restored="!!msg.restored" @complete="data => handleToolComplete(msg.id, msg.timestamp || 0, data)" />
           <!-- 图片消息 -->
           <div v-else-if="msg.imageUrl" class="image-message">
             <img :src="msg.imageUrl" alt="生成的图片" @click="openImage(msg.imageUrl)" />
@@ -184,6 +185,7 @@ interface Message {
   isToolStart?: boolean      // 工具启动消息
   isToolResult?: boolean     // 工具结果消息
   toolResultData?: Record<string, unknown>    // 工具结果数据
+  restored?: boolean         // 是否从历史会话恢复
   // Gemini 异步任务
   geminiTaskId?: string         // Gemini 任务 ID
   geminiTaskStatus?: string     // 任务状态 (running/completed/failed/cancelled)
@@ -200,7 +202,7 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const awaitingConfirm = ref(false)  // 是否在等待用户确认
 
 const { sendToAgent } = useAgentLoop()
-const { addMessage, shouldCompress, addCompressedSummary, getContextMessages } = useSessionStore()
+const { addMessage, shouldCompress, addCompressedSummary, getContextMessages, updateMessageToolContext } = useSessionStore()
 const { handleInput, placeholder } = useInputBridge()
 
 // 消息选择管理
@@ -393,6 +395,8 @@ async function sendMessage() {
   const processed = await handleInput(text)
   if (processed) {
     inputText.value = ''
+    await nextTick()
+    inputRef.value?.focus()
     scrollToBottom()
     return
   }
@@ -434,7 +438,7 @@ async function sendMessage() {
           timestamp: Date.now()
         }
         messages.value.push(toolMsg)
-        addMessage(toolMsg)
+        addMessage({ ...toolMsg, toolContext: { tool: pending.tool } })
       }
       awaitingConfirm.value = false
     } else if (isReject) {
@@ -584,7 +588,7 @@ async function processNormalMessage(text: string) {
           timestamp: Date.now()
         }
         messages.value.push(toolMsg)
-        addMessage(toolMsg)
+        addMessage({ ...toolMsg, toolContext: { tool: response.tool || '' } })
       } else if (response.type === 'tool_start') {
         // 工具启动消息
         const startMsg = {
@@ -596,7 +600,7 @@ async function processNormalMessage(text: string) {
           timestamp: Date.now()
         }
         messages.value.push(startMsg)
-        addMessage(startMsg)
+        addMessage({ ...startMsg, toolContext: { tool: response.tool || '', isToolStart: true } })
       } else if (response.type === 'tool_result') {
         // 工具结果消息
         const resultMsg = {
@@ -609,7 +613,7 @@ async function processNormalMessage(text: string) {
           timestamp: Date.now()
         }
         messages.value.push(resultMsg)
-        addMessage(resultMsg)
+        addMessage({ ...resultMsg, toolContext: { tool: response.tool || '', isToolResult: true, resultData: response.resultData as object | undefined } })
       } else if ((response as any).type === 'gemini_task') {
         // Gemini 异步任务卡片
         const taskMsg = {
@@ -716,6 +720,23 @@ async function saveImage(imageUrl: string | undefined) {
   }
 }
 
+// 工具完成回调：保留工具并转为结果状态
+function handleToolComplete(msgId: string, timestamp: number, data?: any) {
+  const idx = messages.value.findIndex(m => m.id === msgId)
+  if (idx !== -1) {
+    const msg = messages.value[idx]
+    msg.isToolResult = true
+    msg.toolResultData = data || {}
+  }
+  
+  if (timestamp) {
+    updateMessageToolContext(timestamp, {
+      isToolResult: true,
+      resultData: data || {}
+    })
+  }
+}
+
 // 清空消息（新建会话时调用）
 function clearMessages() {
   messages.value = []
@@ -726,17 +747,26 @@ function clearMessages() {
 function loadFromSession() {
   const { currentSession } = useSessionStore()
   if (currentSession.value && currentSession.value.messages.length > 0) {
-    messages.value = currentSession.value.messages.map(m => ({
-      id: `msg_${m.timestamp}_${Math.random().toString(36).slice(2, 9)}`,
-      role: m.role,
-      content: m.content,
-      tool: m.tool,
-      toolParams: m.toolParams,
-      isToolStart: m.toolContext?.isToolStart,
-      isToolResult: m.toolContext?.isToolResult,
-      toolResultData: m.toolContext?.resultData as Record<string, unknown> | undefined,
-      timestamp: m.timestamp
-    }))
+    messages.value = currentSession.value.messages.map(m => {
+      // 判断是否为工具消息（优先从 toolContext 读取，降级从顶层字段兼容）
+      const isToolStart = m.toolContext?.isToolStart || false
+      const isToolResult = m.toolContext?.isToolResult || false
+      const toolResultData = (m.toolContext?.resultData || undefined) as Record<string, unknown> | undefined
+      // 有 tool 字段且非 toolStart/toolResult 的消息是活跃工具实例，标记为 restored
+      const isActiveTool = !!(m.tool && !isToolStart && !isToolResult)
+      return {
+        id: `msg_${m.timestamp}_${Math.random().toString(36).slice(2, 9)}`,
+        role: m.role,
+        content: m.content,
+        tool: isActiveTool ? undefined : m.tool,  // 活跃工具不再重新渲染组件，只保留文本
+        toolParams: m.toolParams,
+        isToolStart,
+        isToolResult,
+        toolResultData,
+        restored: false,
+        timestamp: m.timestamp
+      }
+    })
   } else {
     messages.value = []
   }

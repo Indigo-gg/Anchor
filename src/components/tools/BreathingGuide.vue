@@ -1,7 +1,12 @@
 <template>
   <div class="breathing-container">
-    <!-- 中心呼吸圆圈 -->
-    <div class="breathing-circle-wrapper">
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">🌬️</div>
+      <p>本次呼吸练习已结束</p>
+    </div>
+    <template v-else>
+      <!-- 中心呼吸圆圈 -->
+      <div class="breathing-circle-wrapper">
       <!-- 光晕层 -->
       <div class="breathing-halo" :class="phase"></div>
       
@@ -18,10 +23,11 @@
       剩余 {{ formatTime(duration - totalTime) }}
     </div>
 
-    <!-- 控制按钮 -->
-    <button class="breathing-btn" @click="toggleBreathing">
-      {{ isActive ? '结束练习' : '开始呼吸' }}
-    </button>
+      <!-- 控制按钮 -->
+      <button class="breathing-btn" @click="toggleBreathing">
+        {{ isActive ? '结束练习' : '开始呼吸' }}
+      </button>
+    </template>
   </div>
 </template>
 
@@ -31,10 +37,13 @@ import { ref, computed, onUnmounted } from 'vue'
 const props = withDefaults(defineProps<{
   pattern?: '4-4-4' | '4-7-8' | 'box'
   duration?: number
+  restored?: boolean
 }>(), {
   pattern: '4-4-4',
   duration: 120 // 默认120秒
 })
+
+const expired = ref(props.restored || false)
 
 const emit = defineEmits<{
   complete: []
@@ -79,10 +88,15 @@ function formatTime(seconds: number) {
 function toggleBreathing() {
   if (isActive.value) {
     stopBreathing()
-    emit('complete')
+    handleComplete()
   } else {
     startBreathing()
   }
+}
+
+function handleComplete() {
+  expired.value = true
+  emit('complete')
 }
 
 function startBreathing() {
@@ -100,7 +114,7 @@ function startBreathing() {
     // 检查是否完成
     if (totalTime.value >= actualDuration.value) {
       stopBreathing()
-      emit('complete')
+      handleComplete()
       return
     }
 
@@ -263,5 +277,29 @@ onUnmounted(() => {
   background: var(--bg-secondary);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.expired-icon {
+  font-size: 40px;
+  opacity: 0.8;
+}
+
+.expired-card p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin: 0;
 }
 </style>

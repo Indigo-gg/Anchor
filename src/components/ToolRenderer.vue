@@ -2,68 +2,73 @@
   <div class="tool-container">
     <!-- 呼吸引导 -->
     <BreathingGuide 
-      v-if="tool === 'breathing_guide'" 
+      v-if="normalizedTool === 'breathing_guide'" 
       v-bind="params as any" 
+      :restored="restored"
       @complete="$emit('complete')"
     />
     
     <!-- 急救引导器 -->
     <EmergencyGuide
-      v-else-if="tool === 'emergency_guide'"
+      v-else-if="normalizedTool === 'emergency_guide'"
       v-bind="params as any"
+      :restored="restored"
       @complete="handleEmergencyComplete"
     />
     
     <!-- 能量检测 - 结果模式 -->
     <EnergyResult
-      v-else-if="tool === 'energy_audit' && params?.energy"
+      v-else-if="normalizedTool === 'energy_audit' && params?.energy"
       :energy="params.energy as any"
     />
     
     <!-- 能量检测 - 完整模式（兼容） -->
     <EnergyAudit
-      v-else-if="tool === 'energy_audit'"
+      v-else-if="normalizedTool === 'energy_audit'"
+      :restored="restored"
       @complete="$emit('complete')"
     />
     
-    <!-- 价值观 - Quiz 卡片模式 -->
     <ValuesQuiz
-      v-else-if="tool === 'values_compass' && params?.mode === 'quiz'"
+      v-else-if="normalizedTool === 'values_compass' && params?.mode === 'quiz'"
       :context="(params.context as string) || ''"
       :session-id="quizSessionId"
+      :restored="restored"
       @complete="handleQuizComplete"
     />
     
     <!-- 价值观 - 结果模式 -->
     <ValuesResult
-      v-else-if="tool === 'values_compass' && params?.scores"
+      v-else-if="normalizedTool === 'values_compass' && params?.scores"
       :scores="params.scores as any"
     />
     
     <!-- 价值观 - 完整模式（兼容） -->
     <ValuesCompass
-      v-else-if="tool === 'values_compass'"
+      v-else-if="normalizedTool === 'values_compass'"
       @complete="$emit('complete')"
     />
     
     <!-- 边界可视化 - 结果模式 -->
     <BoundaryResult
-      v-else-if="tool === 'boundary_mapper' && params?.analysis"
+      v-else-if="normalizedTool === 'boundary_mapper' && params?.analysis"
       :analysis="params.analysis as any"
     />
     
     <!-- 边界可视化 - 完整模式（兼容） -->
     <BoundaryMapper
-      v-else-if="tool === 'boundary_mapper'"
+      v-else-if="normalizedTool === 'boundary_mapper'"
       v-bind="params as any"
+      :restored="restored"
       @complete="$emit('complete')"
     />
 
     <!-- 梅花心易占卜 -->
     <MeihuaDivination
-      v-else-if="tool === 'meihua_divination'"
+      v-else-if="normalizedTool === 'meihua_divination'"
       v-bind="params as any"
-      @complete="$emit('complete')"
+      :restored="restored"
+      @complete="$emit('complete', $event)"
     />
     
     <!-- 未实现的工具占位 -->
@@ -75,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import BreathingGuide from './tools/BreathingGuide.vue'
 import EmergencyGuide from './tools/EmergencyGuide.vue'
 import EnergyAudit from './tools/EnergyAudit.vue'
@@ -91,19 +96,22 @@ import { useValuesStore } from '@/services/values'
 const props = defineProps<{
   tool: string
   params?: Record<string, unknown>
+  restored?: boolean
 }>()
 
 const emit = defineEmits<{
   complete: [data?: object]
 }>()
 
+const normalizedTool = computed(() => props.tool.startsWith('skill_') ? props.tool.replace('skill_', '') : props.tool)
+
 // 创建 values quiz 会话
 const { addSession } = useValuesStore()
 const quizSessionId = ref('')
 
 // 当进入 quiz 模式时创建会话
-watch(() => [props.tool, props.params?.mode], () => {
-  if (props.tool === 'values_compass' && props.params?.mode === 'quiz') {
+watch(() => [normalizedTool.value, props.params?.mode], () => {
+  if (normalizedTool.value === 'values_compass' && props.params?.mode === 'quiz') {
     const context = (props.params.context as string) || ''
     const session = addSession(context)
     quizSessionId.value = session.id

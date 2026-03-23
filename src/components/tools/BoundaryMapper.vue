@@ -1,7 +1,12 @@
 <template>
   <div class="boundary-mapper">
-    <!-- 阶段一：场景输入 -->
-    <div v-if="phase === 'input'" class="input-phase">
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">🛡️</div>
+      <p>本次边界梳理已结束</p>
+    </div>
+    <template v-else>
+      <!-- 阶段一：场景输入 -->
+      <div v-if="phase === 'input'" class="input-phase">
       <div class="phase-header">
         <span class="phase-icon">🛡️</span>
         <h3>建立清晰的边界</h3>
@@ -119,6 +124,7 @@
         完成练习
       </button>
     </div>
+    </template>
   </div>
 </template>
 
@@ -126,6 +132,12 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { chatStream, type Message as LLMMessage } from '@/services/llm'
 import { useInputBridge } from '@/services/input-bridge'
+
+const props = defineProps<{
+  restored?: boolean
+}>()
+
+const expired = ref(props.restored || false)
 
 const emit = defineEmits<{
   complete: []
@@ -148,6 +160,7 @@ const MAX_TURNS = 2
 
 // 注册输入桥接
 onMounted(() => {
+  if (expired.value) return
   registerHandler(handleUserInput, '请描述你的困扰...')
 })
 
@@ -344,6 +357,8 @@ function showItemDetail(item: BoundaryItem) {
 }
 
 function completeSession() {
+  expired.value = true
+  unregisterHandler()
   emit('complete')
 }
 </script>
@@ -593,4 +608,28 @@ function completeSession() {
   margin-top: auto;
 }
 .complete-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.expired-icon {
+  font-size: 40px;
+  opacity: 0.8;
+}
+
+.expired-card p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin: 0;
+}
 </style>

@@ -104,9 +104,9 @@ function loadSkill(skillDir: string): SkillData | null {
         // 解析 exec_mode，默认 prompt-inject（向后兼容）
         const execMode = oc?.exec_mode || 'prompt-inject'
 
-        // 构建 kernel 配置（仅 kernel 类型需要）
+        // 构建 kernel 配置（仅 kernel 和 ui 类型需要）
         let kernelConfig: KernelConfig | undefined
-        if (execMode === 'kernel') {
+        if (execMode === 'kernel' || execMode === 'ui') {
             kernelConfig = {
                 maxTurns: oc?.max_turns || 3,
                 confirmMessage: oc?.confirm_message || '要开始吗？',

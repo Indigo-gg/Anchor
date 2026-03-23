@@ -266,6 +266,8 @@ export function useAgentLoop() {
                             return await handleInstantSkill(skill, historyMessages, onChunk)
                         case 'command':
                             return await handleExecutableSkill(skill, historyMessages, onChunk)
+                        case 'ui':
+                            return await handleUiSkill(skill, historyMessages)
                         case 'prompt-inject':
                         default:
                             return await handlePromptInjectSkill(skill, historyMessages, onChunk)
@@ -421,6 +423,35 @@ export function useAgentLoop() {
         }
     }
 
+    /** 1.5 独立 UI 组件型 Skill：返回 type: 'tool' 以触发旧版呈现器接管 */
+    async function handleUiSkill(
+        skill: UnifiedTool,
+        historyMessages: LLMMessage[]
+    ): Promise<AgentResponse[]> {
+        console.log('[Agent] 进入 UI Skill 接管模式:', skill.key)
+        
+        const lastUserContent = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
+        const isConfirmation = /^(好|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起)/i.test(lastUserContent.trim())
+        const kernelCfg = skill.skillMeta?.kernelConfig
+
+        if (isConfirmation || !kernelCfg?.confirmMessage) {
+            console.log('[Agent] 渲染 UI 独立组件并结束代理流')
+            return [{
+                type: 'tool',
+                tool: skill.key,
+                content: kernelCfg?.welcomeMessage || `好的，唤起 ${skill.name} 面板。`
+            }]
+        } else {
+            // 需要用户确认
+            pendingToolConfirm = { tool: skill.key, params: {} }
+            return [{
+                type: 'tool_confirm',
+                tool: skill.key,
+                confirmMessage: kernelCfg.confirmMessage
+            }]
+        }
+    }
+
     /** 2. 即时型 Skill (本身内部有参数提取和执行流) */
     async function handleInstantSkill(
         skill: UnifiedTool,
@@ -466,6 +497,57 @@ export function useAgentLoop() {
         // gemini_cli
         if (handlerKey === 'gemini_cli') {
             return await executeGeminiCliTask(skill, historyMessages, onChunk)
+        }
+
+        // image_gen
+        if (handlerKey === 'image_gen') {
+            console.log('[Agent] 执行即时 Skill: image_gen')
+            const lastUserMsg = historyMessages.filter(m => m.role === 'user').pop()
+            const imagePrompt = lastUserMsg?.content || '生成一张美丽的图片'
+            let imageSize: '1024x1024' | '1280x720' | '720x1280' | '1216x896' = '1024x1024'
+
+            if (skill.skillMeta?.markdownBody) {
+                try {
+                    const sizeExtract = await structuredChat<{ imageSize?: string }>([
+                        { role: 'system', content: `你是参数提取器。提取图片尺寸。\n\n${skill.skillMeta.markdownBody}\n\n只返回 JSON: {"imageSize": "尺寸比例或空"}` },
+                        { role: 'user', content: imagePrompt }
+                    ], { intent: 'fast' })
+                    const sizeMap: Record<string, '1024x1024' | '1280x720' | '720x1280' | '1216x896'> = {
+                        '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280', '4:3': '1216x896'
+                    }
+                    if (sizeExtract.imageSize && sizeMap[sizeExtract.imageSize]) {
+                        imageSize = sizeMap[sizeExtract.imageSize]
+                    }
+                } catch (e) {
+                    console.warn('[Agent] 图片尺寸提取失败，使用默认:', e)
+                }
+            }
+
+            const { currentSession } = useSessionStore()
+            const { activeRole } = useRoleStore()
+            const imgRecord = await createToolRecord({
+                sessionId: currentSession.value?.id,
+                roleId: activeRole.value.id,
+                toolName: 'image_gen',
+                startTime: Date.now(),
+                params: { prompt: imagePrompt, size: imageSize },
+                status: 'pending'
+            })
+
+            const result = await generateImage(imagePrompt, imageSize)
+
+            await updateToolRecord(imgRecord, {
+                endTime: Date.now(),
+                status: result.imageUrl ? 'success' : 'error',
+                result: result,
+                errorMessage: result.error
+            })
+
+            if (result.imageUrl) {
+                return [{ type: 'image', imageUrl: result.imageUrl, content: '图片已生成 🎨' }]
+            } else {
+                return [{ type: 'message', content: result.error || '图片生成失败，请稍后再试' }]
+            }
         }
 
         console.warn('[Agent] 未知的 instant skill handler:', handlerKey)
@@ -676,6 +758,14 @@ ${skill.skillMeta?.markdownBody || ''}
             { role: 'system', content: toolPromptConfig.system },
             ...toolContext.conversationHistory.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
         ]
+
+        if (shouldToolEnd()) {
+            console.log('[Agent] 工具轮数达到上限，强制生成结果')
+            messages.push({
+                role: 'system',
+                content: '强制指令：本次对话的任务轮数已满，你必须立刻结束对话进行总结，输出的 JSON 中必须包含 "complete": true 字段。'
+            })
+        }
 
         let fullContent = ''
         await chatStream(messages, { 

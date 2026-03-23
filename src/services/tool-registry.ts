@@ -21,6 +21,7 @@ export type ToolExecMode =
     | 'instant'         // 即时工具 (单次执行，如 image_gen / web_search / gemini_cli)
     | 'command'         // 命令型 Skill (提取命令 → 沙箱执行 → 总结)
     | 'prompt-inject'   // 知识型 Skill (注入 system prompt, 由 Agent 自行回答)
+    | 'ui'              // 独立 UI 交互组件 (渲染前端组件接管交互)
 
 /** 触发条件 (用于路由描述) */
 export interface SkillTrigger {

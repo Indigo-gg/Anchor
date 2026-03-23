@@ -61,9 +61,9 @@ const BUILTIN_PROVIDERS: ModelProvider[] = [
         baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         apiKey: import.meta.env.VITE_DASHSCOPE_API_KEY_QWEN || '',
         models: {
-            fast: 'qwen3-vl-plus-2025-12-19',//tongyi-xiaomi-analysis-pro;tongyi-xiaomi-analysis-flash;qwen3-vl-flash-2026-01-22
-            simple: 'qwen3-max-2026-01-23',
-            complex: 'glm-4.7',
+            fast: 'glm-4.7',//tongyi-xiaomi-analysis-pro;tongyi-xiaomi-analysis-flash;qwen3-vl-flash-2026-01-22
+            simple: 'kimi-k2.5',
+            complex: 'qwen3-max-2026-01-23',
             // embedding: 'qwen3-vl-embedding',
             reranker: 'qwen3-vl-rerank'
         },

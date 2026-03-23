@@ -1,5 +1,29 @@
 <template>
   <div class="meihua-container">
+    <!-- 已过期提示（从历史恢复） -->
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">☸</div>
+      <p>此次推演已因页面切换而中断</p>
+      <button class="btn-primary complete-btn" @click="handleComplete">收起卷轴</button>
+    </div>
+
+    <!-- 纯结果展示模式 (作为 tool_result 恢复时) -->
+    <div v-if="props.finalReport" class="chat-area">
+      <div class="final-report message ai fade-in">
+         <div class="content report-card">
+           <h4>【心易照见】</h4>
+           <div class="gua-info" v-if="divinationResult">
+              <span class="tag">体: {{ divinationResult.tiGua }} ({{ divinationResult.tiElement }})</span>
+              <span class="tag">用: {{ divinationResult.yongGua }} ({{ divinationResult.yongElement }})</span>
+              <span class="tag relation">{{ divinationResult.relation }}</span>
+           </div>
+           <div class="report-text" v-html="formatMessage(finalReport)"></div>
+         </div>
+      </div>
+    </div>
+
+    <!-- 正常交互流程 -->
+    <template v-else-if="!expired">
     <div class="header">
       <div class="title">
         <span class="icon">☯</span>
@@ -14,12 +38,10 @@
         :key="idx"
         :class="['message', msg.role]"
       >
-        <div class="avatar" v-if="msg.role === 'ai'">☯</div>
         <div class="content" v-html="formatMessage(msg.content)"></div>
       </div>
       
       <div v-if="isTyping" class="message ai typing">
-        <div class="avatar">☯</div>
         <div class="content">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
         </div>
@@ -27,19 +49,19 @@
       
       <!-- Final Report -->
       <div v-if="finalReport" class="final-report message ai fade-in">
-         <div class="avatar">☯</div>
          <div class="content report-card">
            <h4>【心易照见】</h4>
-           <div class="gua-info">
-              <span class="tag">体: {{ divinationResult?.tiGua }} ({{ divinationResult?.tiElement }})</span>
-              <span class="tag">用: {{ divinationResult?.yongGua }} ({{ divinationResult?.yongElement }})</span>
-              <span class="tag relation">{{ divinationResult?.relation }}</span>
+           <div class="gua-info" v-if="divinationResult">
+              <span class="tag">体: {{ divinationResult.tiGua }} ({{ divinationResult.tiElement }})</span>
+              <span class="tag">用: {{ divinationResult.yongGua }} ({{ divinationResult.yongElement }})</span>
+              <span class="tag relation">{{ divinationResult.relation }}</span>
            </div>
            <div class="report-text" v-html="formatMessage(finalReport)"></div>
            <button class="btn-primary complete-btn" @click="handleComplete">收起卷轴，结束照见</button>
          </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -49,6 +71,12 @@ import { useInputBridge } from '@/services/input-bridge'
 import { chat } from '@/services/llm'
 import { calculateDivination, useMeihuaStore, type MeihuaDivinationResult } from '@/services/meihua'
 import { marked } from 'marked'
+
+const props = defineProps<{
+  restored?: boolean
+  finalReport?: string
+  divinationResult?: MeihuaDivinationResult
+}>()
 
 const emit = defineEmits<{
   complete: [data?: object]
@@ -62,11 +90,12 @@ const chatHistory = ref<{role: 'ai'|'user', content: string}[]>([])
 const isTyping = ref(false)
 const round = ref(1) // 1: Init, 2: Deep div, 3: Final
 const chatScroll = ref<HTMLElement | null>(null)
+const expired = ref(false)
 
 // Data
 const userTrigger = ref('')
-const divinationResult = ref<MeihuaDivinationResult | null>(null)
-const finalReport = ref('')
+const divinationResult = ref<MeihuaDivinationResult | null>(props.divinationResult || null)
+const finalReport = ref(props.finalReport || '')
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -85,6 +114,18 @@ const formatMessage = (text: string) => {
 }
 
 onMounted(async () => {
+  // 纯结果展示模式
+  if (props.finalReport) {
+    expired.value = false
+    return
+  }
+
+  // 从历史会话恢复时，显示已中断提示而不是重新开始
+  if (props.restored) {
+    expired.value = true
+    return
+  }
+
   // Take over input
   registerHandler(handleUserInput, "凭直觉输入你注意到的意象...")
   
@@ -222,6 +263,30 @@ function handleComplete() {
   font-family: 'STKaiti', 'KaiTi', serif;
 }
 
+/* 已过期/中断提示卡片 */
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  padding: 40px;
+  text-align: center;
+}
+
+.expired-icon {
+  font-size: 48px;
+  color: rgba(212, 175, 55, 0.5);
+}
+
+.expired-card p {
+  color: rgba(240, 230, 210, 0.6);
+  font-size: 14px;
+  letter-spacing: 1px;
+  margin: 0;
+}
+
 .header {
   display: flex;
   justify-content: space-between;
@@ -274,7 +339,7 @@ function handleComplete() {
 .message {
   display: flex;
   gap: 12px;
-  max-width: 85%;
+  max-width: 95%;
 }
 
 .message.ai {
@@ -284,6 +349,11 @@ function handleComplete() {
 .message.user {
   align-self: flex-end;
   flex-direction: row-reverse;
+}
+
+.final-report {
+  max-width: 100%;
+  width: 100%;
 }
 
 .avatar {

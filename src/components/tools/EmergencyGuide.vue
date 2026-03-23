@@ -1,7 +1,15 @@
 <template>
   <div class="emergency-guide">
-    <!-- 阶段一：Grounding 5-4-3-2-1 -->
-    <div v-if="phase === 'grounding'" class="grounding-phase">
+    <!-- 已过期提示（从历史恢复） -->
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">🌿</div>
+      <p>本次引导练习已结束</p>
+    </div>
+
+    <!-- 正常阶段流程 -->
+    <template v-else>
+      <!-- 阶段一：Grounding 5-4-3-2-1 -->
+      <div v-if="phase === 'grounding'" class="grounding-phase">
       <div class="phase-header">
         <span class="phase-icon">🌿</span>
         <h3>让我们先冷静下来</h3>
@@ -10,18 +18,6 @@
       <div class="grounding-prompt">
         <p class="prompt-text">{{ currentPrompt }}</p>
         <p class="prompt-hint" v-if="currentHint">{{ currentHint }}</p>
-      </div>
-      
-      <div class="grounding-input">
-        <textarea
-          v-model="groundingInput"
-          :placeholder="inputPlaceholder"
-          @keydown.enter.exact.prevent="submitGrounding"
-          rows="2"
-        ></textarea>
-        <button class="submit-btn" @click="submitGrounding" :disabled="!groundingInput.trim()">
-          继续
-        </button>
       </div>
       
       <div class="grounding-progress">
@@ -56,19 +52,6 @@
             <span></span><span></span><span></span>
           </div>
         </div>
-      </div>
-      
-      <div class="clarification-input">
-        <textarea
-          v-model="clarificationInput"
-          placeholder="说说你的感受..."
-          @keydown.enter.exact.prevent="submitClarification"
-          rows="2"
-          :disabled="isThinking"
-        ></textarea>
-        <button class="submit-btn" @click="submitClarification" :disabled="!clarificationInput.trim() || isThinking">
-          发送
-        </button>
       </div>
     </div>
 
@@ -121,17 +104,20 @@
           <span>{{ option.label }}</span>
         </button>
       </div>
-    </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { chatStream, type Message as LLMMessage } from '@/services/llm'
+import { useInputBridge } from '@/services/input-bridge'
 
 const props = defineProps<{
   context?: string
   emotion?: string
+  restored?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -258,6 +244,45 @@ async function submitClarification() {
   isThinking.value = false
 }
 
+const { registerHandler, unregisterHandler } = useInputBridge()
+
+const expired = ref(props.restored || false)
+
+onMounted(() => {
+  if (expired.value) return
+  updateGlobalInput()
+})
+
+onUnmounted(() => {
+  unregisterHandler()
+})
+
+function updateGlobalInput() {
+  if (phase.value === 'grounding') {
+    registerHandler(handleGlobalInput, inputPlaceholder.value)
+  } else if (phase.value === 'clarification') {
+    registerHandler(handleGlobalInput, '说说你的感受...')
+  } else {
+    unregisterHandler()
+  }
+}
+
+watch([phase, inputPlaceholder], () => {
+  updateGlobalInput()
+})
+
+async function handleGlobalInput(text: string) {
+  if (!text.trim()) return
+  if (phase.value === 'grounding') {
+    groundingInput.value = text
+    submitGrounding()
+  } else if (phase.value === 'clarification') {
+    if (isThinking.value) return
+    clarificationInput.value = text
+    await submitClarification()
+  }
+}
+
 // ========== ACT Reframing 阶段 ==========
 interface ReframeItem {
   cognition: string
@@ -377,6 +402,8 @@ function submitFeedback(value: string) {
   
   setTimeout(() => {
     emit('complete', value, sessionData)
+    expired.value = true
+    unregisterHandler()
   }, 500)
 }
 </script>
@@ -667,6 +694,31 @@ function submitFeedback(value: string) {
 
 .feedback-emoji {
   font-size: 28px;
+}
+
+/* 已过期提示卡片 */
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.expired-icon {
+  font-size: 40px;
+  opacity: 0.8;
+}
+
+.expired-card p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin: 0;
 }
 
 /* 动画 */

@@ -147,6 +147,13 @@
           <!-- 历史会话面板 -->
           <div v-else-if="activeTab === 'history'" class="history-panel">
             <section class="section">
+              <!-- 导入导出 -->
+              <div class="history-actions" style="display: flex; gap: 8px; margin-bottom: 16px;">
+                <button class="test-btn" @click="handleExportAll" style="padding: 6px 16px; width: auto; font-size: 13px;">⬇️ 导出全部</button>
+                <button class="test-btn" @click="triggerImport" style="padding: 6px 16px; width: auto; font-size: 13px;">⬆️ 导入备份</button>
+                <input type="file" ref="importInputRef" accept=".json" style="display: none" @change="handleImport" />
+              </div>
+
               <div v-if="sessions.length === 0" class="empty-state">
                 暂无历史会话
               </div>
@@ -396,9 +403,63 @@ defineEmits<{
   close: []
 }>()
 
-const { sessions, sessionSettings, saveSessionSettings, deleteSession } = useSessionStore()
+const { sessions, sessionSettings, saveSessionSettings, deleteSession, exportAllSessions, importSessions } = useSessionStore()
 const { weekRecords: energyWeekRecords, getHourlyStats, getAverageLevel } = useEnergyStore()
 const { radarData } = useValuesStore()
+
+// 导入导出逻辑
+const importInputRef = ref<HTMLInputElement | null>(null)
+
+async function handleExportAll() {
+  try {
+    const jsonStr = await exportAllSessions()
+    const fileName = `anchor_backup_${Date.now()}.json`
+    
+    // @ts-ignore
+    if (window.electronAPI?.saveJsonFile) {
+      // @ts-ignore
+      const result = await window.electronAPI.saveJsonFile(fileName, jsonStr)
+      if (result.success) {
+        alert(`导出成功：${result.path}`)
+      }
+    } else {
+      const blob = new Blob([jsonStr], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      link.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (e) {
+    console.error('导出失败', e)
+    alert('导出失败，请重试')
+  }
+}
+
+function triggerImport() {
+  importInputRef.value?.click()
+}
+
+async function handleImport(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  
+  const reader = new FileReader()
+  reader.onload = async (e) => {
+    const content = e.target?.result as string
+    if (content) {
+      const result = await importSessions(content)
+      if (result.success) {
+        alert(`导入完成！\n成功导入 ${result.importedCount} 个新会话\n跳过 ${result.skippedCount} 个已存在的会话`)
+      } else {
+        alert(`导入失败: ${result.error}`)
+      }
+    }
+    if (importInputRef.value) importInputRef.value.value = ''
+  }
+  reader.readAsText(file)
+}
 const { roles } = useRoleStore()
 
 function getRoleName(roleId: string) {

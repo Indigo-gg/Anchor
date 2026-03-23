@@ -1,7 +1,11 @@
 <template>
   <div class="values-quiz">
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">🧭</div>
+      <p>本次价值观探索已结束</p>
+    </div>
     <!-- 完成后显示结果 -->
-    <template v-if="isComplete">
+    <template v-else-if="isComplete">
       <ValuesResult :scores="finalScores" />
     </template>
     
@@ -53,7 +57,10 @@ import ValuesResult from './ValuesResult.vue'
 const props = defineProps<{
   context: string      // 用户描述的情境背景
   sessionId: string    // 评估会话ID
+  restored?: boolean
 }>()
+
+const expired = ref(props.restored || false)
 
 const emit = defineEmits<{
   complete: [scores: Record<string, number>]
@@ -238,6 +245,7 @@ async function confirmChoice() {
 }
 
 onMounted(() => {
+  if (expired.value) return
   generateNextQuestion()
 })
 </script>
@@ -347,5 +355,29 @@ onMounted(() => {
 
 .confirm-btn:not(:disabled):hover {
   filter: brightness(1.1);
+}
+
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.expired-icon {
+  font-size: 40px;
+  opacity: 0.8;
+}
+
+.expired-card p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin: 0;
 }
 </style>

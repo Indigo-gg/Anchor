@@ -235,7 +235,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
             input: text
         }
         
-        const data = await window.electronAPI.llm.embedding({ config: cstcloud, body })
+        const data = await window.electronAPI.llm.embedding({ config: JSON.parse(JSON.stringify(cstcloud)), body })
 
         if (data.data && data.data[0] && data.data[0].embedding) {
             return data.data[0].embedding

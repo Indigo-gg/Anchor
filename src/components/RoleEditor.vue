@@ -84,7 +84,7 @@
                 <div class="tool-info">
                   <span class="tool-icon">{{ skill.icon }}</span>
                   <span class="tool-name">{{ skill.name }}</span>
-                  <span class="tool-desc">{{ skill.description }}</span>
+                  <!-- <span class="tool-desc">{{ skill.description }}</span> -->
                   <span v-if="skill.execMode !== 'prompt-inject'" class="skill-badge">{{ skill.execMode }}</span>
                 </div>
                 <input

@@ -1,7 +1,12 @@
 <template>
   <div class="energy-audit">
-    <div class="audit-header">
-      <span class="audit-icon">⚡</span>
+    <div v-if="expired" class="expired-card">
+      <div class="expired-icon">⚡</div>
+      <p>本次能量检测已结束</p>
+    </div>
+    <template v-else>
+      <div class="audit-header">
+        <span class="audit-icon">⚡</span>
       <h3>现在能量如何？</h3>
     </div>
 
@@ -63,12 +68,19 @@
       </div>
       <p class="stats-avg">平均能量: {{ getAverageLevel(todayRecords).toFixed(1) }}</p>
     </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useEnergyStore, ENERGY_LEVELS, ACTIVITY_TYPES } from '@/services/energy'
+
+const props = defineProps<{
+  restored?: boolean
+}>()
+
+const expired = ref(props.restored || false)
 
 const emit = defineEmits<{
   complete: []
@@ -115,6 +127,7 @@ function submitRecord() {
   selectedType.value = null
   customActivity.value = ''
   
+  expired.value = true
   emit('complete')
 }
 </script>
@@ -284,5 +297,29 @@ function submitRecord() {
 .stats-avg {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.expired-icon {
+  font-size: 40px;
+  opacity: 0.8;
+}
+
+.expired-card p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin: 0;
 }
 </style>
