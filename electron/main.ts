@@ -6,6 +6,7 @@ import { handleLoadAllSkills } from './skill-loader'
 import { executeInSandbox } from './sandbox-executor'
 import { taskManager } from './gemini-task-manager'
 import { setupDatabase } from './database'
+import { setupDiaryStore } from './diary-store'
 
 // 设置独立的用户数据目录，避免与其他 Electron 应用的缓存冲突
 app.setPath('userData', join(app.getPath('appData'), 'Anchor'))
@@ -592,7 +593,8 @@ ipcMain.handle('save-image', async (_event, fileName: string, base64Data: string
 
 app.whenReady().then(() => {
     logger.info(LogCategory.APP, '应用启动', { version: app.getVersion() })
-    setupDatabase()
+    const db = setupDatabase()
+    setupDiaryStore(db)
     createWindow()
     createTray()
 

@@ -41,6 +41,17 @@ let pendingToolConfirm: {
     params: Record<string, unknown>
 } | null = null
 
+const CONFIRM_RE = /^(好|好的|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起)/i
+const REJECT_TOOL_RE = /^(不了|不用|不用了|不要|不需要|不必|不试|先不用|算了|取消|拒绝|等等|别用|no)([，。,！!？?\s]|$)|不用.*工具|不要.*工具|别.*工具|直接回答|直接回复|继续回答|继续说|正常聊/i
+
+function isToolConfirmation(text: string): boolean {
+    return CONFIRM_RE.test(text.trim().toLowerCase())
+}
+
+function isToolRejection(text: string): boolean {
+    return REJECT_TOOL_RE.test(text.trim().toLowerCase())
+}
+
 export function confirmTool() {
     const pending = pendingToolConfirm
     pendingToolConfirm = null
@@ -218,8 +229,25 @@ export function useAgentLoop() {
 
         // ========== 内核态检查 ==========
         if (isInToolMode()) {
+            if (isToolRejection(_userInput)) {
+                console.log('[Agent] 用户取消工具模式，退出内核态并回到普通对话')
+                endTool()
+                pendingToolConfirm = null
+                return await handleComplexChat(historyMessages, 'complex', onChunk)
+            }
             console.log('[Agent] 内核态模式，跳过意图路由')
             return await handleToolModeChat(_userInput, onChunk)
+        }
+
+        if (pendingToolConfirm && isToolRejection(_userInput)) {
+            console.log('[Agent] 用户拒绝待确认工具，改为直接回答')
+            pendingToolConfirm = null
+            return await handleComplexChat(historyMessages, 'complex', onChunk)
+        }
+
+        if (isToolRejection(_userInput)) {
+            console.log('[Agent] 用户要求不用工具，直接进入普通对话')
+            return await handleComplexChat(historyMessages, 'complex', onChunk)
         }
 
         try {
@@ -400,14 +428,13 @@ export function useAgentLoop() {
         console.log('[Agent] 进入 Kernel Skill 内核态:', skill.key)
         
         const lastUserContent = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
-        const isConfirmation = /^(好|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起)/i.test(lastUserContent.trim())
+        const isConfirmation = isToolConfirmation(lastUserContent)
 
         const kernelCfg = skill.skillMeta?.kernelConfig
         const { startTool } = useSessionStore()
 
-        startTool(skill.key, skill.skillMeta?.markdownBody || '', kernelCfg?.maxTurns || 3)
-
         if (isConfirmation) {
+            startTool(skill.key, skill.skillMeta?.markdownBody || '', kernelCfg?.maxTurns || 3)
             console.log('[Agent] 用户已确认 Kernel，直接启动')
             return [{
                 type: 'tool_start',
@@ -415,10 +442,19 @@ export function useAgentLoop() {
                 content: kernelCfg?.welcomeMessage || '好的，我们开始。'
             }]
         } else {
-            return [{
-                type: 'tool_start',
+            pendingToolConfirm = {
                 tool: skill.key,
-                content: kernelCfg?.confirmMessage || `需要运行 ${skill.name} 吗？`
+                params: {
+                    __kernel: true,
+                    systemPrompt: skill.skillMeta?.markdownBody || '',
+                    maxTurns: kernelCfg?.maxTurns || 3,
+                    welcomeMessage: kernelCfg?.welcomeMessage || '好的，我们开始。'
+                }
+            }
+            return [{
+                type: 'tool_confirm',
+                tool: skill.key,
+                confirmMessage: kernelCfg?.confirmMessage || `需要运行 ${skill.name} 吗？`
             }]
         }
     }
@@ -431,7 +467,7 @@ export function useAgentLoop() {
         console.log('[Agent] 进入 UI Skill 接管模式:', skill.key)
         
         const lastUserContent = historyMessages.filter(m => m.role === 'user').pop()?.content || ''
-        const isConfirmation = /^(好|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起)/i.test(lastUserContent.trim())
+        const isConfirmation = isToolConfirmation(lastUserContent)
         const kernelCfg = skill.skillMeta?.kernelConfig
 
         if (isConfirmation || !kernelCfg?.confirmMessage) {
@@ -654,7 +690,7 @@ ${skill.skillMeta?.markdownBody || ''}
             compiledTask = extResult.task || userQuery
         } catch(e) {}
 
-        const isConfirmation = /^(好|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起|跑|直接跑|执行|直接执行)/i.test(lastUserContent.trim())
+        const isConfirmation = /^(好|好的|行|可以|试试|开始|嗯|ok|yes|是的|来吧|要|试一下|开始吧|来|试|走起|跑|直接跑|执行|直接执行)/i.test(lastUserContent.trim())
         
         if (!isConfirmation) {
             pendingToolConfirm = { tool: 'gemini_cli', params: { task: compiledTask } }
@@ -777,6 +813,74 @@ ${skill.skillMeta?.markdownBody || ''}
         })
 
         addToolMessage('assistant', fullContent)
+
+        // ========== 日记动作指令中间件 ==========
+        // 检测 AI 输出的日记 action JSON，执行后将结果注入对话并触发下一轮分析
+        const diaryActionMatch = fullContent.match(/\{[\s\S]*"action"\s*:\s*"(diary_\w+)"[\s\S]*\}/)
+        if (diaryActionMatch && toolContext.tool === 'skill_diary_tool') {
+            try {
+                const actionJson = JSON.parse(diaryActionMatch[0])
+                const actionType = actionJson.action
+                console.log('[Agent] 日记动作指令:', actionType, actionJson)
+
+                let actionResult: any = null
+
+                switch (actionType) {
+                    case 'diary_import': {
+                        const { importDiaryFromExcel } = await import('@/services/diary')
+                        actionResult = await importDiaryFromExcel(actionJson.filePath)
+                        break
+                    }
+                    case 'diary_search': {
+                        const { searchDiary } = await import('@/services/diary')
+                        actionResult = await searchDiary(actionJson.params || {})
+                        break
+                    }
+                    case 'diary_search_semantic': {
+                        const { searchDiarySemantic } = await import('@/services/diary')
+                        actionResult = await searchDiarySemantic(actionJson.query || '')
+                        break
+                    }
+                    case 'diary_stats': {
+                        const { getDiaryStats } = await import('@/services/diary')
+                        actionResult = await getDiaryStats()
+                        break
+                    }
+                }
+
+                if (actionResult !== null) {
+                    // 将执行结果作为系统消息注入，触发 AI 下一轮分析
+                    const resultText = JSON.stringify(actionResult, null, 2)
+                    addToolMessage('system' as any, `【日记工具执行结果】\n${resultText}`)
+
+                    // 重新构建消息并触发下一轮
+                    const updatedContext = getToolContext()
+                    if (updatedContext) {
+                        const nextMessages: LLMMessage[] = [
+                            { role: 'system', content: toolPromptConfig.system },
+                            ...updatedContext.conversationHistory.map(m => ({
+                                role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+                                content: m.content
+                            })),
+                            { role: 'user', content: '请根据上面的执行结果，用自然语言分析并回复用户。不要再输出 JSON 动作指令。' }
+                        ]
+
+                        let analysisContent = ''
+                        await chatStream(nextMessages, {
+                            intent: 'complex',
+                            onChunk: (chunk, full) => {
+                                analysisContent = full
+                                if (onChunk) onChunk(chunk)
+                            }
+                        })
+                        addToolMessage('assistant', analysisContent)
+                        return [{ type: 'message', content: analysisContent }]
+                    }
+                }
+            } catch (e) {
+                console.warn('[Agent] 日记动作执行失败:', e)
+            }
+        }
 
         const completeMatch = fullContent.match(/\{[\s\S]*"complete"\s*:\s*true[\s\S]*\}/)
         if (completeMatch) {

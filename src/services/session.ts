@@ -106,11 +106,7 @@ async function init() {
         const activeSessions = await appDb.sessions.filter(s => !s.endTime).reverse().toArray()
         if (activeSessions.length > 0) {
             currentSession.value = activeSessions[0]
-            // 把其他的未结束的强制归档
-            for (let i = 1; i < activeSessions.length; i++) {
-                activeSessions[i].endTime = Date.now()
-                await appDb.sessions.put(JSON.parse(JSON.stringify(activeSessions[i])))
-            }
+            // 不再把其他的未结束会话强制归档，保留它们的状态
         } else {
             // 没有未结束的，新开一个
             await startNewSession()
@@ -183,8 +179,10 @@ async function archiveCurrentSession() {
     currentSession.value.endTime = Date.now()
 
     // 生成简单摘要（取第一条用户消息）
-    const firstUserMsg = currentSession.value.messages.find(m => m.role === 'user')
-    currentSession.value.summary = firstUserMsg?.content.slice(0, 50) || '空会话'
+    if (!currentSession.value.summary || currentSession.value.summary === '空会话') {
+        const firstUserMsg = currentSession.value.messages.find(m => m.role === 'user')
+        currentSession.value.summary = firstUserMsg?.content.slice(0, 50) || '空会话'
+    }
 
     // 确保所有必需字段存在
     const sessionToArchive: Session = {
@@ -244,6 +242,12 @@ function addMessage(message: Omit<SessionMessage, 'timestamp'>) {
     // 计数对话轮次（用户消息为一轮），并更新角色的最后对话时间
     if (message.role === 'user') {
         currentSession.value!.roundCount++
+        
+        // 生成基于第一条用户消息的摘要（如果摘要还未设定或为空）
+        if (!currentSession.value!.summary || currentSession.value!.summary === '空会话') {
+            currentSession.value!.summary = message.content.slice(0, 50)
+        }
+        
         try {
             import('./role').then(({ useRoleStore }) => {
                 const { touchRoleChat } = useRoleStore()
@@ -497,6 +501,15 @@ function restoreLatestSession(roleId: string) {
             roundCount: currentSession.value.roundCount || 0,
             contextWindowStart: currentSession.value.contextWindowStart || 0
         }
+        
+        // 确保有暂定摘要，供历史记录展示
+        if (!snapshot.summary || snapshot.summary === '空会话') {
+            const firstUserMsg = snapshot.messages.find(m => m.role === 'user')
+            if (firstUserMsg) {
+                snapshot.summary = firstUserMsg.content.slice(0, 50)
+            }
+        }
+        
         // 确保非空会话存在于历史列表中
         if (!sessions.value.some(s => s.id === snapshot.id)) {
             sessions.value.unshift(snapshot)

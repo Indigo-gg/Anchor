@@ -143,6 +143,10 @@ export function executeResultHandler(handlerKey: string, result: Record<string, 
                 console.log('[ToolRegistry] values_compass 进入 quiz 模式，context:', result.context)
                 break
             }
+            case 'diary_tool': {
+                console.log('[ToolRegistry] diary_tool 完成:', result.summary || result)
+                break
+            }
             default:
                 return  // 无需处理
         }
