@@ -3,7 +3,7 @@
     "appId": "com.anchor.app",
     "productName": "Anchor",
     "directories": {
-        "output": "D:/Pcode/relase"
+        "output": "release"
     },
     "files": [
         "dist-electron/**/*",
@@ -18,6 +18,12 @@
     "extraMetadata": {
         "main": "dist-electron/main.js"
     },
+    "extraResources": [
+        {
+            "from": "skills",
+            "to": "skills"
+        }
+    ],
     "win": {
         "target": [
             "nsis"
