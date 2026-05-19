@@ -29,7 +29,7 @@ const BUILTIN_PROVIDERS: ModelProvider[] = [
         id: 'cstcloud',
         name: 'CSTCloud',
         baseURL: 'https://uni-api.cstcloud.cn/v1',
-        apiKey: import.meta.env.VITE_DASHSCOPE_API_KEY_SCTCLOUD || '',
+        apiKey: import.meta.env.DEV ? (import.meta.env.VITE_DASHSCOPE_API_KEY_SCTCLOUD || '') : '',
         models: {
             fast: 'gpt-oss-120b',
             simple: 'deepseek-v3:671b',
@@ -59,13 +59,13 @@ const BUILTIN_PROVIDERS: ModelProvider[] = [
         id: 'dashscope',
         name: 'DashScope (阿里云)',
         baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        apiKey: import.meta.env.VITE_DASHSCOPE_API_KEY_QWEN || '',
+        apiKey: import.meta.env.DEV ? (import.meta.env.VITE_DASHSCOPE_API_KEY_QWEN || '') : '',
         models: {
-            fast: 'glm-4.7',//tongyi-xiaomi-analysis-pro;tongyi-xiaomi-analysis-flash;qwen3-vl-flash-2026-01-22
-            simple: 'kimi-k2.5',
-            complex: 'qwen3-max-2026-01-23',
+            fast: 'qwen3.6-flash',//tongyi-xiaomi-analysis-pro;tongyi-xiaomi-analysis-flash;qwen3-vl-flash-2026-01-22
+            simple: 'qwen3.5-plus-2026-04-20',
+            complex: 'qwen3.6-max-preview',
             // embedding: 'qwen3-vl-embedding',
-            reranker: 'qwen3-vl-rerank'
+            reranker: 'qwen3.6-flash'
         },
         enabled: true,
         isBuiltin: true,
@@ -123,7 +123,7 @@ const BUILTIN_PROVIDERS: ModelProvider[] = [
     // 剩908,723/共1,000,000
     // 2026/04/30
     // 已开启
-    {
+    ...(import.meta.env.DEV ? [{
         id: 'gemini',
         name: 'Google Gemini',
         baseURL: 'http://127.0.0.1:8045/v1',
@@ -136,7 +136,7 @@ const BUILTIN_PROVIDERS: ModelProvider[] = [
         },
         enabled: true,
         isBuiltin: true,
-    },
+    } as ModelProvider] : []),
 ]
 
 // ============ 存储 ============
@@ -194,8 +194,7 @@ function init() {
     // 回填硬编码的 CSTCloud API Key（向下兼容）
     const cstcloud = providers.value.find(p => p.id === 'cstcloud')
     if (cstcloud && !cstcloud.apiKey) {
-        cstcloud.apiKey = '3b16ea8e11d783dc29306bc4dcd8da83d2abcf65ce2399d0fe43ef93ef3aed72'
-
+        cstcloud.apiKey = import.meta.env.DEV ? '3b16ea8e11d783dc29306bc4dcd8da83d2abcf65ce2399d0fe43ef93ef3aed72' : ''
     }
 
     console.log('[Providers] 已初始化，活跃提供商:', activeProviderId.value)

@@ -37,6 +37,15 @@ interface Window {
             allowedBins: string[]
         }) => Promise<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; error?: string }>
 
+        // 日记工具
+        diary: {
+            importExcel: (filePath: string) => Promise<any>
+            search: (params: any) => Promise<any>
+            getStats: () => Promise<any>
+            getForMemory: (ids?: string[]) => Promise<any[]>
+            clear: () => Promise<any>
+        }
+
         // Gemini CLI 异步任务 API (V2)
         gemini: {
             /** 提交异步任务，立即返回 taskId 和队列位置 */

@@ -202,7 +202,7 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const awaitingConfirm = ref(false)  // 是否在等待用户确认
 
 const { sendToAgent } = useAgentLoop()
-const { addMessage, shouldCompress, addCompressedSummary, getContextMessages, updateMessageToolContext } = useSessionStore()
+const { addMessage, shouldCompress, addCompressedSummary, getContextMessages, updateMessageToolContext, startTool } = useSessionStore()
 const { handleInput, placeholder } = useInputBridge()
 
 // 消息选择管理
@@ -429,6 +429,26 @@ async function sendMessage() {
           scrollToBottom()
           return
         }
+        if ((pending.params as any).__kernel) {
+          startTool(
+            pending.tool,
+            String((pending.params as any).systemPrompt || ''),
+            Number((pending.params as any).maxTurns || 3)
+          )
+          const startMsg = {
+            id: generateMessageId(),
+            role: 'assistant' as const,
+            content: String((pending.params as any).welcomeMessage || '好的，我们开始。'),
+            tool: pending.tool,
+            isToolStart: true,
+            timestamp: Date.now()
+          }
+          messages.value.push(startMsg)
+          addMessage({ ...startMsg, toolContext: { tool: pending.tool, isToolStart: true } })
+          awaitingConfirm.value = false
+          scrollToBottom()
+          return
+        }
         const toolMsg = {
           id: generateMessageId(),
           role: 'assistant' as const,
@@ -445,14 +465,7 @@ async function sendMessage() {
       // 用户拒绝
       cancelToolConfirm()
       awaitingConfirm.value = false
-      const rejectMsg = {
-        id: generateMessageId(),
-        role: 'assistant' as const,
-        content: '好的，那我们继续聊聊？',
-        timestamp: Date.now()
-      }
-      messages.value.push(rejectMsg)
-      addMessage(rejectMsg)
+      await processNormalMessage(text)
     } else {
       // 用户可能想换一个工具或说别的，继续正常对话
       cancelToolConfirm()
@@ -945,7 +958,7 @@ watch(messages, scrollToBottom, { deep: true })
 /* 消息气泡 */
 .message {
   display: flex;
-  max-width: 85%;
+  max-width: 90%;
   position: relative;
   cursor: default;
   transition: all 0.2s ease;

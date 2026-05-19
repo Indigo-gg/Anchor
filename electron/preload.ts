@@ -67,6 +67,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     execSkillCommand: (params: { skillKey: string; command: string; args: string[]; allowedBins: string[] }) =>
         ipcRenderer.invoke('exec-skill-command', params),
 
+    // 日记工具相关
+    diary: {
+        importExcel: (filePath: string) => ipcRenderer.invoke('diary:import-excel', filePath),
+        search: (params: any) => ipcRenderer.invoke('diary:search', params),
+        getStats: () => ipcRenderer.invoke('diary:get-stats'),
+        getForMemory: (ids?: string[]) => ipcRenderer.invoke('diary:get-for-memory', ids),
+        clear: () => ipcRenderer.invoke('diary:clear'),
+    },
+
     // Gemini CLI 异步任务 API (V2)
     gemini: {
         /** 提交异步任务，立即返回 { taskId, position } */
