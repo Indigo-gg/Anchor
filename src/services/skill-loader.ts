@@ -11,8 +11,20 @@ import { registerExternalTools, type UnifiedTool } from '@/services/tool-registr
 export async function loadAllSkills(): Promise<UnifiedTool[]> {
     console.log('[SkillLoader] 请求主进程加载 Skills...')
     try {
-        const skills = await window.electronAPI.loadSkills()
-        console.log('[SkillLoader] 已加载 Skills:', skills.map(s => `${s.icon} ${s.key}`))
+        let skills = await window.electronAPI.loadSkills()
+        
+        if (import.meta.env.PROD) {
+            const experimentalSkills = [
+                'skill_netease-music-cli', 
+                'skill_diary_tool', 
+                'skill_gemini_cli', 
+                'skill_energy_audit', 
+                'skill_boundary_mapper'
+            ]
+            skills = skills.filter((s: any) => !experimentalSkills.includes(s.key))
+        }
+        
+        console.log('[SkillLoader] 已加载 Skills:', skills.map((s: any) => `${s.icon} ${s.key}`))
         return skills as UnifiedTool[]
     } catch (e) {
         console.error('[SkillLoader] 加载 Skills 失败:', e)

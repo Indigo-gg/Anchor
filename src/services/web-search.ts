@@ -11,16 +11,46 @@ export interface SearchResult {
     content: string
 }
 
+import { ref } from 'vue'
+
+const STORAGE_KEY = 'anchor_tavily_api_key'
+export const tavilyApiKey = ref(localStorage.getItem(STORAGE_KEY) || (import.meta.env.DEV ? import.meta.env.VITE_TAVILY_API_KEY : '') || '')
+
+export function setTavilyApiKey(key: string) {
+    tavilyApiKey.value = key
+    localStorage.setItem(STORAGE_KEY, key)
+}
+
 /**
  * 执行网络搜索，并格式化为供大模型参考的文本
  * @param query 搜索关键词
  * @returns 格式化后的参考内容
  */
 export async function performWebSearch(query: string): Promise<string> {
-    const apiKey = import.meta.env.VITE_TAVILY_API_KEY
+    const apiKey = tavilyApiKey.value
     if (!apiKey) {
-        console.error('[WebSearch] 缺少 VITE_TAVILY_API_KEY 配置')
-        return '【系统提示】：由于未配置 VITE_TAVILY_API_KEY，网络检索服务不可用。请提醒系统管理员进行配置。'
+        console.error('[WebSearch] 缺少 Tavily API KEY 配置')
+        return '【系统提示】：网络检索服务未配置 API Key。请在设置中配置 Tavily API Key。'
+    }
+
+    // Tavily API 限制 query 最大 400 字符，超长时智能截断
+    const MAX_QUERY_LENGTH = 380
+    if (query.length > MAX_QUERY_LENGTH) {
+        console.warn(`[WebSearch] Query 过长 (${query.length} 字符)，截断至 ${MAX_QUERY_LENGTH}`)
+        let truncated = query.slice(0, MAX_QUERY_LENGTH)
+        // 尝试在最后一个空格/中文标点处断开，避免截在词中间
+        const lastBreak = Math.max(
+            truncated.lastIndexOf(' '),
+            truncated.lastIndexOf('，'),
+            truncated.lastIndexOf('。'),
+            truncated.lastIndexOf('？'),
+            truncated.lastIndexOf('！'),
+            truncated.lastIndexOf('、')
+        )
+        if (lastBreak > MAX_QUERY_LENGTH * 0.5) {
+            truncated = truncated.slice(0, lastBreak)
+        }
+        query = truncated
     }
 
     try {

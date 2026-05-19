@@ -37,7 +37,7 @@
           <div v-if="activeTab === 'dashboard'" class="dashboard-panel">
             
             <!-- 能量状态 -->
-            <section class="card">
+            <section class="card" v-if="isDev">
               <h3 class="card-title">⚡ 能量周报</h3>
               <div class="energy-stat">
                 <div class="stat-number">{{ avgEnergy.toFixed(1) }}</div>
@@ -93,7 +93,7 @@
             </section>
 
             <!-- 边界练习 -->
-            <section class="card">
+            <section class="card" v-if="isDev">
               <h3 class="card-title">🛡️ 边界练习</h3>
               <div class="coming-soon sm">
                  记录功能开发中...
@@ -298,6 +298,27 @@
               </div>
             </section>
 
+            <!-- 工具设置 -->
+            <section class="card">
+              <h3 class="card-title">🛠️ 工具配置</h3>
+              
+              <div class="setting-row">
+                <label class="setting-label">Tavily (网络搜索)</label>
+                <div class="input-group">
+                  <input
+                    :type="showTavilyKey ? 'text' : 'password'"
+                    :value="tavilyApiKey"
+                    @input="handleTavilyKeyChange"
+                    class="settings-input"
+                    placeholder="tvly-..."
+                  />
+                  <button class="toggle-eye" @click="showTavilyKey = !showTavilyKey">
+                    {{ showTavilyKey ? '🙈' : '👁' }}
+                  </button>
+                </div>
+              </div>
+            </section>
+
             <!-- 会话设置 -->
             <section class="card">
               <h3 class="card-title">💬 会话设置</h3>
@@ -387,6 +408,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+
+const isDev = import.meta.env.DEV
+
 import { useSessionStore, formatTime, type Session } from '@/services/session'
 import { useEnergyStore } from '@/services/energy'
 import { useValuesStore } from '@/services/values'
@@ -643,6 +667,13 @@ function handleWindowSizeChange(event: Event) {
     const value = parseInt((event.target as HTMLInputElement).value)
     sessionSettings.value.contextWindowSize = value
     saveSessionSettings()
+}
+
+// ============ 工具设置 ============
+import { tavilyApiKey, setTavilyApiKey } from '@/services/web-search'
+const showTavilyKey = ref(false)
+function handleTavilyKeyChange(event: Event) {
+    setTavilyApiKey((event.target as HTMLInputElement).value)
 }
 
 // ============ 外观设置 ============
