@@ -36,6 +36,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     energy: {
         // 请求显示能量工具
         showAudit: () => ipcRenderer.send('show-energy-audit'),
+        // 隐藏能量检测悬浮窗
+        hideEnergyBar: () => ipcRenderer.send('hide-energy-bar'),
+        // 触发能量打卡提醒 (用于调试)
+        triggerReminder: () => ipcRenderer.send('trigger-energy-reminder-debug'),
+        // 监听悬浮卡片重新开始倒数与状态重置信号
+        onStartCountdown: (callback: () => void) => {
+            const listener = () => callback()
+            ipcRenderer.on('start-countdown', listener)
+            return () => ipcRenderer.removeListener('start-countdown', listener)
+        },
         // 监听能量提醒
         onReminder: (callback: () => void) => {
             ipcRenderer.on('energy-reminder', callback)

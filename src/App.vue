@@ -1,5 +1,10 @@
 <template>
-  <div class="app-container">
+  <!-- 如果是悬浮窗，仅渲染打卡条 -->
+  <div v-if="windowType === 'energy-popup'" class="popup-window-container">
+    <EnergyBarPopup />
+  </div>
+
+  <div v-else class="app-container">
     <!-- 左侧角色侧边栏 -->
     <RoleSidebar @role-changed="handleRoleChanged" />
 
@@ -40,13 +45,22 @@ import { ref } from 'vue'
 import Chat from './views/Chat.vue'
 import SettingsDrawer from './views/SettingsDrawer.vue'
 import RoleSidebar from './components/RoleSidebar.vue'
+import EnergyBarPopup from './components/tools/EnergyBarPopup.vue'
 import { useSessionStore } from './services/session'
 import { useRoleStore } from './services/role'
 import { useAppearanceStore } from './services/appearance'
 
-// 确保在应用启动时初始化会话存储和外观设置
-useSessionStore()
-useAppearanceStore()
+// 检查是否为悬浮窗模式
+const windowType = ref('')
+const params = new URLSearchParams(window.location.search)
+windowType.value = params.get('window') || ''
+
+// 只有在主窗口时才初始化会话与外观设置
+if (windowType.value !== 'energy-popup') {
+  useSessionStore()
+  useAppearanceStore()
+}
+
 
 const showDrawer = ref(false)
 const chatRef = ref<InstanceType<typeof Chat> | null>(null)

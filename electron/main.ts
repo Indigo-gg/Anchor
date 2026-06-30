@@ -14,6 +14,8 @@ app.setPath('userData', join(app.getPath('appData'), 'Anchor'))
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isAlwaysOnTop = false // 默认不置顶
+let energyBarWindow: BrowserWindow | null = null
+
 
 // 获取当前开机自启动状态
 function getAutoLaunchEnabled(): boolean {
@@ -65,6 +67,47 @@ function createWindow() {
 
     logger.info(LogCategory.WINDOW, '主窗口创建完成')
 }
+
+function createEnergyBarWindow() {
+    energyBarWindow = new BrowserWindow({
+        width: 480,
+        height: 230,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        show: false,
+        webPreferences: {
+            preload: join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    })
+
+    // 设置位置在屏幕右上角 (x: 右上对齐偏左20px, y: 偏上40px)
+    const { screen } = require('electron')
+    const display = screen.getPrimaryDisplay()
+    const x = display.workArea.x + display.workArea.width - 480 - 20
+    const y = display.workArea.y + 40
+    energyBarWindow.setPosition(x, y)
+
+    // 调试与生产环境双向 URL 处理
+    if (process.env.VITE_DEV_SERVER_URL) {
+        energyBarWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?window=energy-popup`)
+    } else {
+        energyBarWindow.loadFile(join(__dirname, '../dist-renderer/index.html'), {
+            query: { window: 'energy-popup' }
+        })
+    }
+
+    energyBarWindow.on('closed', () => {
+        energyBarWindow = null
+    })
+
+    logger.info(LogCategory.WINDOW, '能量检测悬浮窗初始化完成')
+}
+
 
 
 function createTray() {
@@ -278,18 +321,29 @@ function generateEnergyReminders() {
 }
 
 function triggerEnergyReminder() {
-    logger.info(LogCategory.ENERGY, '触发能量检测提醒')
+    logger.info(LogCategory.ENERGY, '触发能量检测悬浮窗提醒')
 
-    // 发送通知到渲染进程
-    mainWindow?.webContents.send('energy-reminder')
-
-    // 如果窗口隐藏，闪烁托盘图标
-    if (!mainWindow?.isVisible()) {
-        tray?.setToolTip('⚡ 记录一下现在的能量状态')
+    if (!energyBarWindow) {
+        createEnergyBarWindow()
     }
+
+    // 每次弹出前向卡片组件发送重新计时和重置打卡状态的信号
+    energyBarWindow?.webContents.send('start-countdown')
+    energyBarWindow?.show()
+    energyBarWindow?.focus()
 }
 
-// 监听渲染进程请求显示能量工具
+// 监听渲染进程请求隐藏能量悬浮窗
+ipcMain.on('hide-energy-bar', () => {
+    energyBarWindow?.hide()
+})
+
+// 监听渲染进程请求测试触发能量提醒
+ipcMain.on('trigger-energy-reminder-debug', () => {
+    triggerEnergyReminder()
+})
+
+// 监听渲染进程请求显示能量工具 (原有主窗口逻辑)
 ipcMain.on('show-energy-audit', () => {
     showWindow()
     mainWindow?.webContents.send('open-energy-audit')
@@ -596,6 +650,7 @@ app.whenReady().then(() => {
     const db = setupDatabase()
     setupDiaryStore(db)
     createWindow()
+    createEnergyBarWindow() // 提前实例化能量打卡悬浮窗
     createTray()
 
     // 初始化 Gemini 任务管理器

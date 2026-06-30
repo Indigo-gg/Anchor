@@ -37,8 +37,8 @@
           <div v-if="activeTab === 'dashboard'" class="dashboard-panel">
             
             <!-- 能量状态 -->
-            <section class="card" v-if="isDev">
-              <h3 class="card-title">⚡ 能量周报</h3>
+            <section class="card">
+              <h3 class="card-title">⚡ 能量状态周报</h3>
               <div class="energy-stat">
                 <div class="stat-number">{{ avgEnergy.toFixed(1) }}</div>
                 <div class="stat-label">本周平均能量 / 4.0</div>
@@ -316,6 +316,12 @@
                     {{ showTavilyKey ? '🙈' : '👁' }}
                   </button>
                 </div>
+              </div>
+              <div class="setting-row" style="margin-top: 16px; border-top: 1px dashed var(--border); padding-top: 16px;">
+                <label class="setting-label">⚡ 能量打卡测试</label>
+                <button class="test-btn" style="width: auto; padding: 6px 16px; font-size: 12px;" @click="triggerEnergyPopup">
+                  立即弹出悬浮打卡条
+                </button>
               </div>
             </section>
 
@@ -674,6 +680,11 @@ import { tavilyApiKey, setTavilyApiKey } from '@/services/web-search'
 const showTavilyKey = ref(false)
 function handleTavilyKeyChange(event: Event) {
     setTavilyApiKey((event.target as HTMLInputElement).value)
+}
+
+function triggerEnergyPopup() {
+    // @ts-ignore
+    window.electronAPI?.energy?.triggerReminder?.()
 }
 
 // ============ 外观设置 ============
